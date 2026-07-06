@@ -32,7 +32,10 @@ from src.api.schemas import (
     ReloadModelsResponse,
 )
 from src.inference.quality import compute_quality_diagnostics
+from src.utils.config import load_env_file
 from src.utils.logging import get_logger
+
+load_env_file()  # populate os.environ from .env (e.g. GENDER_LABEL_0/1) before anything reads it
 
 logger = get_logger("api")
 

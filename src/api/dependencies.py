@@ -8,6 +8,7 @@ restarting the process.
 from __future__ import annotations
 
 import logging
+import os
 
 from src.inference.artifacts import load_all_artifacts
 from src.inference.predictor import Predictor
@@ -26,6 +27,18 @@ class AppState:
         self.config = load_config(CONFIG_DIR / "api.yaml")
         api_config = self.config["api"]
         self.device = resolve_device(self.config.get("device", "auto"))
+
+        # GENDER_LABEL_0 / GENDER_LABEL_1 env vars (see .env.example) take
+        # priority over configs/api.yaml's gender_label_overrides when set,
+        # letting a deployer rename the displayed dataset gender-label
+        # classes (e.g. to match a specific dataset's own documented
+        # convention) without editing YAML or retraining.
+        env_overrides = [os.environ.get("GENDER_LABEL_0"), os.environ.get("GENDER_LABEL_1")]
+        if any(env_overrides):
+            base = api_config.get("gender_label_overrides") or [None, None]
+            api_config["gender_label_overrides"] = [
+                env_overrides[i] or (base[i] if i < len(base) else None) for i in range(2)
+            ]
 
         artifacts = load_all_artifacts(api_config, self.device)
         self.predictor = Predictor(artifacts, api_config, self.device)

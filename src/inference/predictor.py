@@ -81,6 +81,18 @@ class Predictor:
             self.class_names: list[str] = gender_head_cfg.get(
                 "class_names", ["gender_label_0", "gender_label_1"]
             )
+            # Display-name override, independent of whatever was baked into
+            # the checkpoint's training-time config -- lets a deployer
+            # rename the two classes (e.g. to a dataset's own documented
+            # convention) without retraining. Never changes which learned
+            # class index is which; only the label shown for it. See
+            # GENDER_LABEL_0 / GENDER_LABEL_1 in .env.example.
+            overrides = api_config.get("gender_label_overrides")
+            if overrides:
+                self.class_names = [
+                    overrides[i] if i < len(overrides) and overrides[i] else name
+                    for i, name in enumerate(self.class_names)
+                ]
             self.confidence_threshold: float = gender_head_cfg.get("confidence_threshold", 0.80)
             image_size = self.config["dataset"]["image_size"] if "dataset" in self.config else 128
             self.transform = EvalTransform(image_size)

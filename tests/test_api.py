@@ -37,7 +37,7 @@ def _tiny_model_config():
     }
 
 
-def _make_fake_predictor() -> Predictor:
+def _make_fake_predictor(api_config: dict | None = None) -> Predictor:
     config = _tiny_model_config()
     model = MultiTaskFaceModel(config)
     model.eval()
@@ -45,8 +45,8 @@ def _make_fake_predictor() -> Predictor:
         model=model, model_config=config, checkpoint_name="fake_test_checkpoint.pt",
         checkpoint_epoch=1, calibration=None, knn_baseline=None, warnings=[],
     )
-    api_config = {"model_version": "v1-test"}
-    return Predictor(artifacts, api_config, device="cpu")
+    resolved_api_config = {"model_version": "v1-test", **(api_config or {})}
+    return Predictor(artifacts, resolved_api_config, device="cpu")
 
 
 def _sample_image_bytes() -> bytes:
@@ -110,3 +110,33 @@ def test_quality_check_endpoint():
     assert body["width"] == 64
     assert body["height"] == 64
     assert isinstance(body["warnings"], list)
+
+
+def test_gender_label_override_replaces_both_names():
+    """api.gender_label_overrides lets a deployer rename classes without retraining."""
+    predictor = _make_fake_predictor({"gender_label_overrides": ["male", "female"]})
+    assert predictor.class_names == ["male", "female"]
+
+
+def test_gender_label_override_is_partial_by_index():
+    """A null/missing entry falls back to the checkpoint's own trained class name."""
+    predictor = _make_fake_predictor({"gender_label_overrides": ["male", None]})
+    assert predictor.class_names == ["male", "gender_label_1"]
+
+
+def test_no_gender_label_override_keeps_checkpoint_names():
+    predictor = _make_fake_predictor()
+    assert predictor.class_names == ["gender_label_0", "gender_label_1"]
+
+
+def test_predict_endpoint_reflects_gender_label_override():
+    with TestClient(app) as client:
+        dependencies.app_state.predictor = _make_fake_predictor({"gender_label_overrides": ["male", "female"]})
+        dependencies.app_state.config = {"api": {"model_version": "v1-test"}}
+
+        response = client.post(
+            "/predict", files={"file": ("test.png", _sample_image_bytes(), "image/png")}
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body["gender"]["probabilities"].keys()) == {"male", "female"}

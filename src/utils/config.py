@@ -23,6 +23,24 @@ class ConfigError(ValueError):
     """Raised when a configuration file is missing required keys."""
 
 
+def load_env_file(env_path: str | os.PathLike | None = None) -> None:
+    """Load ``.env`` into ``os.environ`` if present (no-op if missing).
+
+    Values already set in the real environment are never overwritten
+    (``override=False``), so an explicit ``export`` / Colab
+    ``os.environ[...] = ...`` always wins over a stale ``.env`` file.
+    Call this once near the start of any entry point (API, CLI script)
+    that reads Kaggle credentials, GENDER_LABEL_0/1, etc. from the
+    environment -- nothing in this repo reads ``.env`` automatically
+    otherwise.
+    """
+    from dotenv import load_dotenv
+
+    path = Path(env_path) if env_path else REPO_ROOT / ".env"
+    if path.exists():
+        load_dotenv(path, override=False)
+
+
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Recursively merge ``override`` into ``base``, returning a new dict."""
     result = copy.deepcopy(base)
