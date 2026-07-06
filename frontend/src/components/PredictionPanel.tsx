@@ -7,6 +7,8 @@ import QualityPanel from "./QualityPanel";
 import UncertaintyPanel from "./UncertaintyPanel";
 
 export default function PredictionPanel({ result }: { result: PredictionResponse }) {
+  const hasPrediction = result.age !== null && result.gender !== null;
+
   return (
     <div className="space-y-4">
       {result.face_detected !== null && (
@@ -17,7 +19,7 @@ export default function PredictionPanel({ result }: { result: PredictionResponse
         >
           {result.face_detected
             ? "Face detected: the model was run on a cropped face region (classical Haar-cascade detection)."
-            : "No face detected: the model was run on the full uploaded image."}
+            : "No face detected: no age or gender-label prediction was generated for this image."}
         </p>
       )}
 
@@ -34,16 +36,22 @@ export default function PredictionPanel({ result }: { result: PredictionResponse
         </ul>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <AgePredictionCard age={result.age} />
-        <GenderPredictionCard gender={result.gender} />
-        <UncertaintyPanel uncertainty={result.age.uncertainty} />
-        <QualityPanel quality={result.quality} />
-      </div>
+      {hasPrediction ? (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <AgePredictionCard age={result.age!} />
+            <GenderPredictionCard gender={result.gender!} />
+            <UncertaintyPanel uncertainty={result.age!.uncertainty} />
+            <QualityPanel quality={result.quality} />
+          </div>
 
-      {result.gradcam && <GradCamPanel gradcam={result.gradcam} />}
-      {result.knn_comparison && (
-        <ModelComparisonPanel age={result.age} gender={result.gender} knn={result.knn_comparison} />
+          {result.gradcam && <GradCamPanel gradcam={result.gradcam} />}
+          {result.knn_comparison && (
+            <ModelComparisonPanel age={result.age!} gender={result.gender!} knn={result.knn_comparison} />
+          )}
+        </>
+      ) : (
+        <QualityPanel quality={result.quality} />
       )}
 
       <p className="text-xs text-slate-400">

@@ -69,7 +69,10 @@ def test_health_endpoint_returns_ok():
 
 def test_predict_endpoint_schema_with_mocked_model():
     with TestClient(app) as client:
-        dependencies.app_state.predictor = _make_fake_predictor()
+        # Face detection disabled: this synthetic noise image has no real face in
+        # it, and with detection on the API would correctly decline to predict
+        # (see test_predict_reports_no_face_detected_on_synthetic_noise_image).
+        dependencies.app_state.predictor = _make_fake_predictor({"enable_face_detection": False})
         dependencies.app_state.config = {"api": {"model_version": "v1-test"}}
 
         response = client.post(
@@ -90,18 +93,28 @@ def test_predict_endpoint_schema_with_mocked_model():
 
 
 def test_predict_reports_no_face_detected_on_synthetic_noise_image():
-    """Face detection is enabled by default; a random-noise upload has no real face in it."""
+    """Face detection is enabled by default; a random-noise upload has no real face in it.
+
+    Even when gradcam/knn are explicitly requested, no face means no
+    prediction of any kind is generated (not just that they're omitted by
+    default) -- a dog photo should not receive an age/gender guess.
+    """
     with TestClient(app) as client:
         dependencies.app_state.predictor = _make_fake_predictor()
         dependencies.app_state.config = {"api": {"model_version": "v1-test"}}
 
         response = client.post(
-            "/predict", files={"file": ("test.png", _sample_image_bytes(), "image/png")}
+            "/predict?include_gradcam=true&include_knn=true",
+            files={"file": ("test.png", _sample_image_bytes(), "image/png")},
         )
     assert response.status_code == 200
     body = response.json()
     assert body["face_detected"] is False
-    assert any("No face detected" in w for w in body["warnings"])
+    assert body["age"] is None
+    assert body["gender"] is None
+    assert body["gradcam"] is None
+    assert body["knn_comparison"] is None
+    assert any("declining to generate" in w for w in body["warnings"])
 
 
 def test_predict_face_detected_is_null_when_disabled():
@@ -160,7 +173,9 @@ def test_no_gender_label_override_keeps_checkpoint_names():
 
 def test_predict_endpoint_reflects_gender_label_override():
     with TestClient(app) as client:
-        dependencies.app_state.predictor = _make_fake_predictor({"gender_label_overrides": ["male", "female"]})
+        dependencies.app_state.predictor = _make_fake_predictor(
+            {"gender_label_overrides": ["male", "female"], "enable_face_detection": False}
+        )
         dependencies.app_state.config = {"api": {"model_version": "v1-test"}}
 
         response = client.post(

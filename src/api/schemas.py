@@ -90,8 +90,12 @@ class KNNComparisonResponse(BaseModel):
 
 
 class PredictionResponse(BaseModel):
-    age: AgePredictionResponse
-    gender: GenderLabelPredictionResponse
+    age: AgePredictionResponse | None = Field(
+        None, description="Null when no face was detected -- no age prediction is generated in that case."
+    )
+    gender: GenderLabelPredictionResponse | None = Field(
+        None, description="Null when no face was detected -- no gender-label prediction is generated in that case."
+    )
     quality: QualityDiagnosticsResponse
     gradcam: GradCamResponse | None
     knn_comparison: KNNComparisonResponse | None

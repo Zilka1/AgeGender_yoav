@@ -55,8 +55,8 @@ class KNNComparison:
 
 @dataclass
 class PredictionResult:
-    age: AgePrediction
-    gender: GenderPrediction
+    age: AgePrediction | None
+    gender: GenderPrediction | None
     quality: QualityDiagnostics
     gradcam_age: np.ndarray | None
     gradcam_gender: np.ndarray | None
@@ -132,9 +132,17 @@ class Predictor:
             model_input_image, face_detected = crop_to_face(image_rgb, self.face_margin_ratio)
             if not face_detected:
                 warnings.append(
-                    "No face detected via classical Haar-cascade detection; using the "
-                    "full image, which may reduce prediction reliability since the "
-                    "model expects a face-centered crop similar to its training data."
+                    "No face detected via classical Haar-cascade detection; declining to "
+                    "generate age or dataset gender-label predictions, since the model is "
+                    "only meaningful on face images similar to its training data."
+                )
+                return PredictionResult(
+                    age=None, gender=None, quality=quality,
+                    gradcam_age=None, gradcam_gender=None, knn=None,
+                    model_version=self.api_config.get("model_version", "v1"),
+                    checkpoint_name=self.artifacts.checkpoint_name,
+                    face_detected=False, model_input_image=None,
+                    warnings=warnings, latency_ms=(time.time() - start) * 1000.0,
                 )
 
         image_tensor = self.transform(model_input_image).unsqueeze(0).to(self.device)

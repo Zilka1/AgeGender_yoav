@@ -75,8 +75,9 @@ export interface KNNComparison {
 }
 
 export interface PredictionResponse {
-  age: AgePrediction;
-  gender: GenderLabelPrediction;
+  // Null when no face was detected -- no prediction is generated in that case.
+  age: AgePrediction | null;
+  gender: GenderLabelPrediction | null;
   quality: QualityDiagnostics;
   gradcam: GradCamResult | null;
   knn_comparison: KNNComparison | null;

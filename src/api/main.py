@@ -165,8 +165,9 @@ def _build_prediction_response(result) -> PredictionResponse:
             mean_neighbor_distance=result.knn.mean_neighbor_distance,
         )
 
-    return PredictionResponse(
-        age=AgePredictionResponse(
+    age_response = None
+    if result.age is not None:
+        age_response = AgePredictionResponse(
             q10=result.age.q10, q50=result.age.q50, q90=result.age.q90,
             q10_calibrated=result.age.q10_calibrated, q90_calibrated=result.age.q90_calibrated,
             is_calibrated=result.age.is_calibrated,
@@ -178,14 +179,21 @@ def _build_prediction_response(result) -> PredictionResponse:
                     "intervals target marginal coverage under split-conformal calibration."
                 ),
             ),
-        ),
-        gender=GenderLabelPredictionResponse(
+        )
+
+    gender_response = None
+    if result.gender is not None:
+        gender_response = GenderLabelPredictionResponse(
             probabilities=result.gender.probabilities,
             predicted_label=result.gender.predicted_label,
             confidence=result.gender.confidence,
             abstained=result.gender.abstained,
             display_label=result.gender.predicted_label or "Not sure",
-        ),
+        )
+
+    return PredictionResponse(
+        age=age_response,
+        gender=gender_response,
         quality=QualityDiagnosticsResponse(**result.quality.as_dict()),
         gradcam=gradcam_response,
         knn_comparison=knn_response,
