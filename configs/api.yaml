@@ -5,7 +5,7 @@ api:
   port: 8000
   cors_origins: ["http://localhost:5173", "http://127.0.0.1:5173"]
   model_version: "v1"
-  active_checkpoint: ./checkpoints/multitask_best_balanced.pt
+  active_checkpoint: ./checkpoints/multitask_best_balanced_score.pt
   knn_index_dir: ./outputs/knn
   calibration_dir: ./outputs/calibration
   persist_uploaded_images: false
