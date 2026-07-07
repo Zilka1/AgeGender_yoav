@@ -33,6 +33,26 @@ def resize(image: Image.Image, size: int) -> Image.Image:
     return image.resize((size, size), Image.BILINEAR)
 
 
+def resize_and_center_crop(image: Image.Image, size: int) -> Image.Image:
+    """Resize preserving aspect ratio (shorter side -> ``size``), then center-crop to ``size x size``.
+
+    Unlike a direct ``resize((size, size))`` squish, this avoids
+    distorting the aspect ratio of non-square inputs (e.g. a
+    portrait-oriented photo upload) before the model sees them.
+    """
+    width, height = image.size
+    if width < height:
+        new_width = size
+        new_height = max(size, round(height * size / width))
+    else:
+        new_height = size
+        new_width = max(size, round(width * size / height))
+    resized = image.resize((new_width, new_height), Image.BILINEAR)
+    left = (new_width - size) // 2
+    top = (new_height - size) // 2
+    return resized.crop((left, top, left + size, top + size))
+
+
 def random_horizontal_flip(image: Image.Image, p: float = 0.5) -> Image.Image:
     if random.random() < p:
         return image.transpose(Image.FLIP_LEFT_RIGHT)
@@ -51,7 +71,7 @@ def random_crop_resize(image: Image.Image, size: int, scale: tuple[float, float]
             x = random.randint(0, width - w)
             y = random.randint(0, height - h)
             return image.crop((x, y, x + w, y + h)).resize((size, size), Image.BILINEAR)
-    return resize(image, size)
+    return resize_and_center_crop(image, size)
 
 
 def color_jitter(image: Image.Image, brightness: float = 0.2, contrast: float = 0.2, saturation: float = 0.2) -> Image.Image:
@@ -71,13 +91,18 @@ def random_gaussian_blur(image: Image.Image, p: float = 0.2, radius_range: tuple
 
 
 class EvalTransform:
-    """Deterministic resize + normalize, used for validation/test/inference."""
+    """Deterministic resize (aspect-ratio-preserving) + center-crop + normalize.
+
+    Used for validation/test/inference. Uses resize_and_center_crop
+    rather than a direct squish-to-square, so a non-square input (e.g. an
+    arbitrary uploaded photo) is not distorted before the model sees it.
+    """
 
     def __init__(self, image_size: int = 128) -> None:
         self.image_size = image_size
 
     def __call__(self, image: Image.Image) -> torch.Tensor:
-        image = resize(image, self.image_size)
+        image = resize_and_center_crop(image, self.image_size)
         tensor = to_tensor(image)
         return normalize(tensor)
 
