@@ -2,6 +2,13 @@
 """CLI: run the deep architecture analysis (gradient interference, representation
 similarity, embedding visualizations) and assemble the final Markdown report.
 
+The report's "Plain CNN vs Custom ResNet-18 Backbone Comparison" section and
+the per-experiment ablation table are assembled from whatever
+outputs/metrics/*_parameter_breakdown.json (+ _timing.json / _test_metrics.json)
+files already exist on disk -- run scripts/run_experiments.py first to
+produce those for exp_0_simple_cnn_shared_adapters_learned_balance and
+exp_d_shared_adapters_learned_balance (and any other experiments).
+
 Usage:
     python scripts/generate_architecture_report.py --checkpoint checkpoints/exp_c_shared_adapters_best_balanced_score.pt
 """

@@ -7,6 +7,14 @@ was initialized from a checkpoint produced by this repository's
 self-supervised pretraining, or a compatible user-supplied local
 checkpoint. Otherwise this module returns a single supervised warm-up
 stage and the caller must surface the accompanying warning.
+
+Stage names are matched against each backbone's actual top-level submodule
+names (see ``MultiTaskFaceModel.set_stage_trainable``), so this plan works
+unchanged for either backbone (``custom_resnet18`` or ``simple_cnn``, see
+``src/models/backbone_factory.py``): both expose ``layer1``-``layer4``.
+``simple_cnn`` has no separate ``stem`` submodule (``layer1`` fulfills
+that role), so a ``"stem"`` entry in ``unfreeze_layers`` simply matches no
+parameter for that backbone -- a harmless no-op, not an error.
 """
 
 from __future__ import annotations

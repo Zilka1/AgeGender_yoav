@@ -25,7 +25,10 @@ from evaluate import _default_output_name  # noqa: E402
 def test_ablation_table_picks_up_test_metrics_when_present():
     experiment_results = {
         "exp_c_shared_adapters": {
-            "parameter_breakdown": {"backbone": 11176512, "adapters": 263424, "total": 11571909},
+            "parameter_breakdown": {
+                "backbone_name": "custom_resnet18", "backbone_parameters": 11176512,
+                "adapter_parameters": 263424, "total_parameters": 11571909,
+            },
             "test_metrics": {"age_mae": 5.71, "gender_accuracy": 0.97, "interval_coverage": 0.79},
             "mean_epoch_time_seconds": 41.5,
         }
@@ -36,12 +39,16 @@ def test_ablation_table_picks_up_test_metrics_when_present():
     assert row["gender_accuracy"] == 0.97
     assert row["interval_coverage"] == 0.79
     assert row["backbone_params"] == 11176512
+    assert row["backbone_name"] == "custom_resnet18"
 
 
 def test_ablation_table_is_nan_only_when_test_metrics_truly_absent():
     experiment_results = {
         "exp_a_separate": {
-            "parameter_breakdown": {"backbone": 22353024, "adapters": 0, "total": 22484997},
+            "parameter_breakdown": {
+                "backbone_name": "custom_resnet18", "backbone_parameters": 22353024,
+                "adapter_parameters": 0, "total_parameters": 22484997,
+            },
             "test_metrics": {},
             "mean_epoch_time_seconds": 44.2,
         }
@@ -50,6 +57,23 @@ def test_ablation_table_is_nan_only_when_test_metrics_truly_absent():
     row = table.iloc[0]
     assert row["age_mae"] is None
     assert row["backbone_params"] == 22353024
+
+
+def test_ablation_table_includes_simple_cnn_experiment():
+    experiment_results = {
+        "exp_0_simple_cnn_shared_adapters_learned_balance": {
+            "parameter_breakdown": {
+                "backbone_name": "simple_cnn", "backbone_parameters": 4_000_000,
+                "adapter_parameters": 263424, "total_parameters": 4_400_000,
+            },
+            "test_metrics": {"age_mae": 6.5, "gender_accuracy": 0.94, "interval_coverage": 0.75},
+            "mean_epoch_time_seconds": 30.0,
+        }
+    }
+    table = build_architecture_ablation_table(experiment_results)
+    row = table.iloc[0]
+    assert row["backbone_name"] == "simple_cnn"
+    assert row["backbone_params"] == 4_000_000
 
 
 def test_default_output_name_strips_best_checkpoint_suffix():

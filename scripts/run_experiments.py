@@ -1,14 +1,17 @@
 #!/usr/bin/env python
-"""CLI: run the full config-driven architecture ablation suite (Experiments A-F).
+"""CLI: run the full config-driven architecture ablation suite (Experiments 0, A-F).
 
-See configs/experiments.yaml for what each experiment tests. Experiment E
-(parametric vs kNN) does not train a new model -- run scripts/build_knn_index.py
-and scripts/evaluate.py --compare-knn against Experiment D's checkpoint instead.
-Experiment F (pretrained vs scratch) is skipped automatically with a clear
-message if no self-supervised checkpoint exists yet (run scripts/pretrain.py first).
+See configs/experiments.yaml for what each experiment tests. Experiment 0
+is a controlled plain-CNN-vs-Custom-ResNet-18 backbone baseline (compare
+against Experiment D). Experiment E (parametric vs kNN) does not train a
+new model -- run scripts/build_knn_index.py and scripts/evaluate.py
+--compare-knn against Experiment D's checkpoint instead. Experiment F
+(pretrained vs scratch) is skipped automatically with a clear message if
+no self-supervised checkpoint exists yet (run scripts/pretrain.py first).
 
 Usage:
     python scripts/run_experiments.py [--only exp_a_separate,exp_c_shared_adapters]
+    python scripts/run_experiments.py --only exp_0_simple_cnn_shared_adapters_learned_balance,exp_d_shared_adapters_learned_balance
 """
 
 from __future__ import annotations

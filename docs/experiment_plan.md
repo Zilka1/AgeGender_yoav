@@ -15,7 +15,28 @@ and do task-specific bottleneck adapters plus learned uncertainty-based
 loss balancing reduce negative transfer relative to naive sharing or fully
 independent backbones? Separately: how does a non-parametric k-NN
 classifier/regressor in the learned embedding space compare to the
-parametric heads?
+parametric heads, and does the Custom ResNet-18's residual design itself
+provide measurable value over a conventional non-residual CNN of
+otherwise comparable capacity?
+
+## Experiment 0 -- Plain CNN backbone baseline (`exp_0_simple_cnn_shared_adapters_learned_balance`)
+
+A **controlled baseline, not a general CNN benchmark**: a conventional,
+non-residual CNN (`src/models/simple_cnn.py` -- stacked Conv+BN+ReLU+MaxPool
+blocks, no skip connections) substituted for the Custom ResNet-18 backbone,
+with everything else held identical to Experiment D -- the same shared
+multi-task structure, task-specific adapters, learned uncertainty loss
+balancing, training setup, data split, and evaluation pipeline. The plain
+CNN uses the same 512-d embedding output, so the adapters/heads/losses are
+byte-for-byte the same code path regardless of which backbone feeds them.
+
+This isolates one variable: **residual connections, present or absent**.
+It deliberately does not compare a weak CNN with fixed losses against a
+ResNet with adapters and learned balancing -- that would change too many
+variables at once to attribute any difference to the backbone. This is
+not intended to be tuned into a competitive standalone architecture, and
+the plain CNN must never be described as this project's main backbone;
+`CustomResNet18` remains that throughout.
 
 ## Experiment A -- Separate models (`exp_a_separate`)
 
@@ -68,6 +89,14 @@ because self-supervised pretraining is comparatively compute-hungry (see
 
 ## What "success" would look like (to be judged only from real results)
 
+- **D vs. 0**: if residual connections provide real value, Experiment D
+  (Custom ResNet-18) should show a meaningfully lower age MAE and/or
+  higher gender-label accuracy than Experiment 0 (plain CNN) at a
+  comparable or modestly higher parameter/latency cost -- not just a
+  cheaper model that happens to be worse. See the auto-generated "Plain
+  CNN vs Custom ResNet-18 Backbone Comparison" section of
+  `docs/architecture_analysis_generated.md` for the actual numbers and a
+  factual (non-causal) one-sentence summary.
 - **B vs. A**: shared backbone should not be meaningfully worse than
   separate backbones at a fraction of the parameters, ideally similar or
   better on at least one task (evidence of positive transfer).

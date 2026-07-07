@@ -114,6 +114,12 @@ Age Quantile Head                          Gender Classification Head
 - **Loss balancing**: `src/losses/multitask_loss.py` -- fixed weights or
   learned homoscedastic-uncertainty weighting, with masked losses so a
   task with no labels in a batch contributes nothing.
+- **Backbone selection**: config-driven (`model.backbone.name` in
+  `configs/model.yaml`) via `src/models/backbone_factory.py`. Default and
+  main research backbone is `custom_resnet18`; `simple_cnn`
+  (`src/models/simple_cnn.py`, a conventional non-residual CNN) exists
+  solely as a controlled baseline for Experiment 0 -- see
+  [Plain CNN vs. Custom ResNet-18 backbone comparison](#plain-cnn-vs-custom-resnet-18-backbone-comparison-experiment-0).
 
 ## Results
 
@@ -316,10 +322,41 @@ make experiments
 ```
 
 Runs `scripts/run_experiments.py` against `configs/experiments.yaml`
-(Experiments A-F, see `docs/experiment_plan.md`), reusing the same split
-for all of them. Experiment E (parametric vs. kNN) and Experiment F
+(Experiments 0, A-F, see `docs/experiment_plan.md`), reusing the same
+split for all of them. Experiment E (parametric vs. kNN) and Experiment F
 (pretrained vs. scratch, only if a pretrained checkpoint exists) are
 handled via the dedicated commands below rather than a fresh training run.
+
+### Plain CNN vs. Custom ResNet-18 backbone comparison (Experiment 0)
+
+The plain CNN baseline (`src/models/simple_cnn.py`, a conventional
+non-residual stack of Conv+BN+ReLU+MaxPool blocks) isolates the value of
+residual connections. It uses the same multi-task heads, adapters,
+learned loss balancing, data split, training setup, and evaluation
+metrics as Experiment D -- so any performance difference is attributable
+primarily to the backbone design (residual vs. plain), not to unrelated
+pipeline changes. It is a controlled baseline only, never the project's
+main architecture, and this is not a general CNN-architecture benchmark
+(no MobileNet/EfficientNet/ViT/pretrained weights are involved).
+
+```bash
+# Run only the plain CNN baseline
+python scripts/run_experiments.py --only exp_0_simple_cnn_shared_adapters_learned_balance
+
+# Run the controlled CNN-vs-ResNet comparison (Experiment 0 + Experiment D)
+python scripts/run_experiments.py --only exp_0_simple_cnn_shared_adapters_learned_balance,exp_d_shared_adapters_learned_balance
+
+# Regenerate the research report, including the
+# "Plain CNN vs Custom ResNet-18 Backbone Comparison" section
+python scripts/generate_architecture_report.py --checkpoint checkpoints/exp_d_shared_adapters_learned_balance_best_balanced_score.pt
+```
+
+Backbone selection is config-driven (`model.backbone.name:
+custom_resnet18 | simple_cnn` in `configs/model.yaml`); both backbones
+expose the same `forward` / `forward_features` (`layer1`-`layer4`, for
+Grad-CAM compatibility) / `num_parameters` interface, so the rest of the
+pipeline (adapters, heads, trainer, evaluation, inference, Grad-CAM) is
+unmodified by which one is active.
 
 ## Conformal calibration
 

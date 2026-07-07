@@ -4,12 +4,18 @@ Supports three architecture modes (selected via ``model.architecture``),
 which correspond directly to Experiments A/B/C-D in
 ``configs/experiments.yaml``:
 
-* ``separate``            -- two independent Custom ResNet-18 backbones,
-  one per task (Experiment A).
+* ``separate``            -- two independent backbones, one per task
+  (Experiment A).
 * ``shared_no_adapters``  -- one shared backbone, heads attached directly
   to the shared embedding (Experiment B).
 * ``shared_adapters``     -- one shared backbone, each task reads through
   its own residual bottleneck adapter before its head (Experiments C/D).
+
+The backbone itself is pluggable via ``model.backbone.name``
+(``src/models/backbone_factory.py``): ``custom_resnet18`` (the project's
+main research backbone, default) or ``simple_cnn`` (a conventional
+non-residual CNN used only as a controlled baseline, see
+``exp_0_simple_cnn_shared_adapters_learned_balance``).
 
 When ``model.loss_balancing.mode == "learned_uncertainty"``, this module
 also owns the two trainable task log-variance parameters (see
@@ -24,7 +30,7 @@ import torch
 import torch.nn as nn
 
 from src.models.adapters import AgeAdapter, GenderAdapter, IdentityAdapter
-from src.models.custom_resnet import CustomResNet18, build_backbone
+from src.models.backbone_factory import build_backbone
 from src.models.heads import AgeQuantileHead, GenderClassificationHead
 
 VALID_ARCHITECTURES = ("separate", "shared_no_adapters", "shared_adapters")
@@ -32,29 +38,38 @@ VALID_ARCHITECTURES = ("separate", "shared_no_adapters", "shared_adapters")
 
 @dataclass
 class ParameterBreakdown:
-    """Parameter counts by component, used for architecture-comparison reports."""
+    """Parameter counts by component, used for architecture-comparison reports.
 
+    ``as_dict()`` keys match what ``src/evaluation/comparison.py`` and the
+    generated architecture report expect, including the plain-CNN-vs-ResNet
+    backbone comparison section.
+    """
+
+    backbone_name: str
     backbone: int
     adapters: int
-    heads: int
+    age_head: int
+    gender_head: int
     log_variance: int = 0
     total: int = field(init=False)
 
     def __post_init__(self) -> None:
-        self.total = self.backbone + self.adapters + self.heads + self.log_variance
+        self.total = self.backbone + self.adapters + self.age_head + self.gender_head + self.log_variance
 
-    def as_dict(self) -> dict[str, int]:
+    def as_dict(self) -> dict[str, int | str]:
         return {
-            "backbone": self.backbone,
-            "adapters": self.adapters,
-            "heads": self.heads,
-            "log_variance": self.log_variance,
-            "total": self.total,
+            "backbone_name": self.backbone_name,
+            "backbone_parameters": self.backbone,
+            "adapter_parameters": self.adapters,
+            "age_head_parameters": self.age_head,
+            "gender_head_parameters": self.gender_head,
+            "log_variance_parameters": self.log_variance,
+            "total_parameters": self.total,
         }
 
 
 class MultiTaskFaceModel(nn.Module):
-    """Custom-ResNet-18-based multi-task age + dataset gender-label model."""
+    """Multi-task age + dataset gender-label model with a pluggable backbone."""
 
     def __init__(self, config: dict) -> None:
         super().__init__()
@@ -66,6 +81,7 @@ class MultiTaskFaceModel(nn.Module):
 
         backbone_cfg = model_cfg["backbone"]
         embedding_dim = backbone_cfg.get("embedding_dim", 512)
+        self.backbone_name: str = backbone_cfg.get("name", "custom_resnet18")
         adapters_cfg = model_cfg.get("adapters", {})
         adapters_enabled = adapters_cfg.get("enabled", True) and architecture == "shared_adapters"
         bottleneck_dim = adapters_cfg.get("bottleneck_dim", 128)
@@ -75,8 +91,8 @@ class MultiTaskFaceModel(nn.Module):
         gender_head_cfg = model_cfg.get("gender_head", {})
 
         if architecture == "separate":
-            self.age_backbone: CustomResNet18 = build_backbone(backbone_cfg)
-            self.gender_backbone: CustomResNet18 = build_backbone(backbone_cfg)
+            self.age_backbone: nn.Module = build_backbone(backbone_cfg)
+            self.gender_backbone: nn.Module = build_backbone(backbone_cfg)
             self.backbone = None
         else:
             self.backbone = build_backbone(backbone_cfg)
@@ -185,15 +201,17 @@ class MultiTaskFaceModel(nn.Module):
         if isinstance(self.gender_adapter, nn.Module) and hasattr(self.gender_adapter, "num_parameters"):
             adapter_params += self.gender_adapter.num_parameters()
 
-        head_params = sum(p.numel() for p in self.age_head.parameters()) + sum(
-            p.numel() for p in self.gender_head.parameters()
-        )
+        age_head_params = sum(p.numel() for p in self.age_head.parameters())
+        gender_head_params = sum(p.numel() for p in self.gender_head.parameters())
         log_var_params = 0
         if self.log_var_age is not None:
             log_var_params = self.log_var_age.numel() + self.log_var_gender.numel()
 
         return ParameterBreakdown(
-            backbone=backbone_params, adapters=adapter_params, heads=head_params, log_variance=log_var_params
+            backbone_name=self.backbone_name,
+            backbone=backbone_params, adapters=adapter_params,
+            age_head=age_head_params, gender_head=gender_head_params,
+            log_variance=log_var_params,
         )
 
 

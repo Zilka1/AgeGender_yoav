@@ -5,6 +5,25 @@
 # the same train/val/test split (data/splits/) whenever the split exists.
 
 experiments:
+  exp_0_simple_cnn_shared_adapters_learned_balance:
+    description: >
+      Controlled backbone baseline: a conventional non-residual CNN
+      (src/models/simple_cnn.py) using the exact same shared multi-task
+      structure, task-specific adapters, learned uncertainty loss
+      balancing, training setup, and data split as Experiment D. This
+      isolates the contribution of the Custom ResNet-18 residual backbone
+      -- it is not a general CNN architecture benchmark, and this plain
+      CNN is never the project's main backbone.
+    overrides:
+      model:
+        architecture: shared_adapters
+        backbone:
+          name: simple_cnn
+        adapters:
+          enabled: true
+        loss_balancing:
+          mode: learned_uncertainty
+
   exp_a_separate:
     description: >
       Two independent Custom ResNet-18 backbones, one per task, with
@@ -84,6 +103,7 @@ experiments:
           mode: learned_uncertainty
 
 run_order:
+  - exp_0_simple_cnn_shared_adapters_learned_balance
   - exp_a_separate
   - exp_b_shared_no_adapters
   - exp_c_shared_adapters
