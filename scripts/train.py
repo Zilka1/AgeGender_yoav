@@ -54,20 +54,21 @@ def run_training(config: dict, experiment_name: str) -> dict:
 
     model = build_multitask_model(config)
     checkpoint_dir = REPO_ROOT / config["paths"]["checkpoint_dir"]
-    trainer = Trainer(
-        model, config, datasets["train"], datasets["validation"], device=device,
-        checkpoint_dir=checkpoint_dir, experiment_name=experiment_name,
-        gender_class_weights=gender_class_weights,
-    )
-    result = trainer.train()
-
     output_dir = REPO_ROOT / config["paths"]["output_dir"]
     metrics_dir = output_dir / "metrics"
     plots_dir = output_dir / "plots"
     metrics_dir.mkdir(parents=True, exist_ok=True)
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    save_json(result["history"], metrics_dir / f"{experiment_name}_history.json")
+    trainer = Trainer(
+        model, config, datasets["train"], datasets["validation"], device=device,
+        checkpoint_dir=checkpoint_dir, experiment_name=experiment_name,
+        gender_class_weights=gender_class_weights, output_dir=output_dir,
+    )
+    result = trainer.train()
+    # trainer.train() already wrote metrics/{experiment_name}_history.{csv,json}
+    # incrementally after every epoch (see src/training/trainer.py) -- no
+    # need to write history.json again here.
     save_json(
         {"mean_epoch_time_seconds": float(np.mean(result["epoch_times"])) if result["epoch_times"] else None},
         metrics_dir / f"{experiment_name}_timing.json",

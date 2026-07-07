@@ -14,6 +14,7 @@ message with the command that would produce it, never a fabricated number.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -41,9 +42,19 @@ _PRIMARY_EXPERIMENT_CANDIDATES = (
 )
 
 
-def _md_image(path: Path, repo_root: Path, label: str) -> str:
-    rel = path.relative_to(repo_root).as_posix()
-    return f"![{label}](../{rel})\n"
+def _md_image(path: Path, report_dir: Path, label: str) -> str:
+    """Markdown image link, relative to ``report_dir`` (where the .md file itself lives).
+
+    Uses ``os.path.relpath`` rather than ``Path.relative_to`` deliberately:
+    ``relative_to`` raises ``ValueError`` unless ``path`` is actually a
+    subpath of ``report_dir``'s ancestor, which fails whenever the report
+    and its plots live in unrelated directory trees (e.g. a notebook's
+    ``RUN_DIR`` is entirely outside the repository checkout).
+    ``os.path.relpath`` computes a correct ``../``-chain between any two
+    absolute paths (same drive on Windows) regardless of ancestry.
+    """
+    rel = os.path.relpath(path, start=report_dir)
+    return f"![{label}]({Path(rel).as_posix()})\n"
 
 
 def _discover_seed_metrics(metrics_dir: Path) -> dict[str, list[dict]]:
@@ -99,7 +110,7 @@ def _build_seed_aggregate_section(outputs_dir: Path) -> str:
     return "\n".join(lines)
 
 
-def _build_seed_plots(outputs_dir: Path, repo_root: Path) -> str:
+def _build_seed_plots(outputs_dir: Path, report_dir: Path) -> str:
     groups = _discover_seed_metrics(outputs_dir / "metrics")
     if not groups:
         return ""
@@ -119,11 +130,11 @@ def _build_seed_plots(outputs_dir: Path, repo_root: Path) -> str:
             stds.append(stats["std"] or 0.0)
         if names:
             out = plot_mean_std_bar(names, np.array(means), np.array(stds), metric, plots_dir / f"seed_mean_std_{metric}.png")
-            lines.append(_md_image(out, repo_root, f"{metric} mean +/- std across seeds"))
+            lines.append(_md_image(out, report_dir, f"{metric} mean +/- std across seeds"))
     return "\n".join(lines)
 
 
-def _build_uncertainty_section(outputs_dir: Path, repo_root: Path) -> str:
+def _build_uncertainty_section(outputs_dir: Path, report_dir: Path) -> str:
     lines = ["## Uncertainty Evaluation\n"]
     lines.append(
         "**Important caveat: marginal coverage is not conditional coverage.** "
@@ -171,7 +182,7 @@ def _build_uncertainty_section(outputs_dir: Path, repo_root: Path) -> str:
     for filename, label in plot_specs:
         path = plots_dir / filename
         if path.exists():
-            lines.append(_md_image(path, repo_root, label))
+            lines.append(_md_image(path, report_dir, label))
         else:
             lines.append(f"_{label} plot not yet generated (`{filename}` not found)._\n")
 
@@ -187,7 +198,7 @@ def _build_uncertainty_section(outputs_dir: Path, repo_root: Path) -> str:
     return "\n".join(lines)
 
 
-def _build_robustness_section(outputs_dir: Path, repo_root: Path) -> str:
+def _build_robustness_section(outputs_dir: Path, report_dir: Path) -> str:
     lines = ["## Robustness Degradation\n"]
     df = _read_csv(outputs_dir / "robustness" / "robustness_results.csv")
     if df is None:
@@ -210,11 +221,11 @@ def _build_robustness_section(outputs_dir: Path, repo_root: Path) -> str:
     for metric in ("age_mae", "gender_accuracy", "abstention_rate"):
         plot_path = robustness_dir / f"robustness_{metric}.png"
         if plot_path.exists():
-            lines.append(_md_image(plot_path, repo_root, f"Robustness degradation curve: {metric}"))
+            lines.append(_md_image(plot_path, report_dir, f"Robustness degradation curve: {metric}"))
     return "\n".join(lines)
 
 
-def _build_parameter_latency_section(outputs_dir: Path, repo_root: Path) -> str:
+def _build_parameter_latency_section(outputs_dir: Path, report_dir: Path) -> str:
     lines = ["## Parameter Count and Inference Latency Comparison\n"]
     experiment_results = discover_experiment_results(outputs_dir / "metrics")
     labels, params, latencies = [], [], []
@@ -235,7 +246,7 @@ def _build_parameter_latency_section(outputs_dir: Path, repo_root: Path) -> str:
     plots_dir = outputs_dir / "plots" / "final_report"
     plots_dir.mkdir(parents=True, exist_ok=True)
     out_path = plot_parameter_latency_comparison(labels, params, latencies, plots_dir / "parameter_latency_comparison.png")
-    lines.append(_md_image(out_path, repo_root, "Parameter count vs inference latency per experiment"))
+    lines.append(_md_image(out_path, report_dir, "Parameter count vs inference latency per experiment"))
     table = pd.DataFrame({"experiment": labels, "total_parameters": params, "latency_ms_per_image": latencies})
     lines.append(_df_to_md_table(table) + "\n")
     return "\n".join(lines)
@@ -279,8 +290,16 @@ def _build_findings_section(outputs_dir: Path) -> str:
     return "\n".join(lines)
 
 
-def generate_final_results_report(outputs_dir: str | Path, repo_root: str | Path) -> str:
-    outputs_dir, repo_root = Path(outputs_dir), Path(repo_root)
+def generate_final_results_report(outputs_dir: str | Path, report_dir: str | Path) -> str:
+    """Build the report's Markdown text.
+
+    ``report_dir`` is the directory the resulting Markdown will actually be
+    written into (not necessarily related to ``outputs_dir`` or any
+    repository root) -- every embedded image link is computed relative to
+    it via ``os.path.relpath``, so this must be the real destination
+    directory for links to resolve correctly once written to disk.
+    """
+    outputs_dir, report_dir = Path(outputs_dir), Path(report_dir)
     sections = [
         "# Final Results Report\n",
         (
@@ -302,18 +321,18 @@ def generate_final_results_report(outputs_dir: str | Path, repo_root: str | Path
         _build_ablation_section(outputs_dir),
         build_backbone_comparison_section(outputs_dir),
         _build_seed_aggregate_section(outputs_dir),
-        _build_seed_plots(outputs_dir, repo_root),
-        _build_uncertainty_section(outputs_dir, repo_root),
-        _build_robustness_section(outputs_dir, repo_root),
-        _build_parameter_latency_section(outputs_dir, repo_root),
+        _build_seed_plots(outputs_dir, report_dir),
+        _build_uncertainty_section(outputs_dir, report_dir),
+        _build_robustness_section(outputs_dir, report_dir),
+        _build_parameter_latency_section(outputs_dir, report_dir),
         _build_findings_section(outputs_dir),
     ]
     return "\n".join(s for s in sections if s)
 
 
-def save_final_results_report(outputs_dir: str | Path, docs_dir: str | Path, repo_root: str | Path) -> Path:
-    report = generate_final_results_report(outputs_dir, repo_root)
+def save_final_results_report(outputs_dir: str | Path, docs_dir: str | Path) -> Path:
     out_path = Path(docs_dir) / "final_results_report.md"
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    report = generate_final_results_report(outputs_dir, report_dir=out_path.parent)
     out_path.write_text(report, encoding="utf-8")
     return out_path

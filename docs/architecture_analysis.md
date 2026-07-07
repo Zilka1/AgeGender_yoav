@@ -91,13 +91,17 @@ prediction.
 
 ## 7. Robustness
 
-See `configs/robustness.yaml` and `src/evaluation/robustness.py`: eight
-deterministic corruption types (blur, noise, low-resolution, JPEG
-compression, brightness shifts, partial occlusion, partial crop) at
-multiple severities, evaluated with a fixed seed. Reported per
-corruption/severity: age MAE, interval coverage/width, gender accuracy,
-abstention rate, and (if a k-NN index exists) the same metrics for the
-non-parametric baseline.
+See `configs/robustness.yaml` and `src/evaluation/robustness.py`: eleven
+deterministic corruption types (Gaussian blur, Gaussian noise,
+low-resolution/resize degradation, JPEG compression, low/high brightness,
+low/high contrast, grayscale, partial occlusion, partial crop) at multiple
+severities, evaluated with a fixed seed (the same corrupted images are
+shown to every model compared). Reported per corruption/severity: age MAE,
+interval coverage/width, gender accuracy, abstention rate, and (if a k-NN
+index exists) the same metrics for the non-parametric baseline.
+`compute_degradation()` / `build_robustness_diff_table()` add delta/percent
+degradation and a direct model-vs-model difference table for multi-model
+comparisons (see section 9).
 
 ## 8. Grad-CAM ("model attention visualization")
 
@@ -108,6 +112,42 @@ the last residual stage (`layer4` by default). **This is a gradient-weighted
 activation visualization. It is not proof of causality, and it does not
 explain the model's "reasoning" in any human sense** -- treat it as a
 diagnostic aid, not an explanation.
+
+## 9. Backbone comparison suite (selective prediction, tail errors, honest interpretation)
+
+`src/evaluation/backbone_comparison.py` (via `scripts/compare_backbones.py`)
+adds analyses the sections above don't cover, across two or more
+checkpoints at once:
+
+- **Clean-test summary**: adds age-error percentiles (median/p90/p95) and
+  tail-error rates (fraction of samples with error >5/>10/>15/>20 years) to
+  the mean-based MAE/RMSE, plus gender-label selective accuracy, coverage,
+  abstention rate, and *effective* accuracy (correct-and-accepted / all
+  samples -- see `docs/model_card.md`'s "Abstention behavior" section for
+  why this differs from selective accuracy).
+- **Selective-prediction / risk-coverage analysis**
+  (`src/evaluation/selective.py`): ranks samples by a confidence score (max
+  class probability for gender; `-(q90-q10)` for age, narrower = more
+  confident), sweeps coverage, and reports risk (error rate, or MAE) at
+  each coverage level plus AURC (area under the risk-coverage curve, lower
+  is better). Models are always compared **at the same coverage level**,
+  never at each model's own independent confidence threshold, since a
+  model can trade risk for coverage arbitrarily.
+- **Paired bootstrap confidence intervals**: resamples the same indices for
+  both models each iteration (valid because both were evaluated on the
+  identical test set), reporting a CI for the risk difference at each
+  coverage level. An advantage is only reported as real when this interval
+  excludes zero -- never from a single point estimate.
+- **Tail-error analysis**: empirical CDF of absolute age error and
+  per-age-bucket MAE (0-12/13-19/20-34/35-49/50-64/65+), to check whether a
+  model reduces *catastrophic* errors even when average MAE looks similar.
+- **Final interpretation**: an explicitly conditional "Is Additional
+  Residual Complexity Justified?" narrative
+  (`build_final_interpretation`) -- credits the residual architecture only
+  when a statistically supported (bootstrap CI excludes zero) AURC
+  advantage exists, and otherwise states plainly that the compact/plain
+  alternative is preferred. This is designed to be equally capable of
+  concluding against the residual architecture as for it.
 
 ## Reading the generated report
 

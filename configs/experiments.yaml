@@ -24,6 +24,30 @@ experiments:
         loss_balancing:
           mode: learned_uncertainty
 
+  exp_0b_plain_deep18_no_skip_shared_adapters_learned_balance:
+    description: >
+      Depth/width-matched plain (non-residual) counterpart to Custom
+      ResNet-18 (src/models/plain_deep18_no_skip.py): identical stem,
+      stage widths, block layout [2,2,2,2], embedding size, adapters,
+      learned uncertainty loss balancing, and training setup as
+      Experiment D -- only the residual/skip-connection additions are
+      removed. Unlike Experiment 0 (SimpleCNN, which also differs in
+      depth/width and is therefore an efficiency/accuracy trade-off vs.
+      ResNet), this experiment isolates the causal contribution of
+      residual connections specifically, holding depth and width fixed.
+      See docs/experiment_plan.md for the exact parameter-count
+      difference (the three unavoidable 1x1 downsample-shortcut
+      projections ResNet has and this backbone cannot).
+    overrides:
+      model:
+        architecture: shared_adapters
+        backbone:
+          name: plain_deep18_no_skip
+        adapters:
+          enabled: true
+        loss_balancing:
+          mode: learned_uncertainty
+
   exp_a_separate:
     description: >
       Two independent Custom ResNet-18 backbones, one per task, with
@@ -104,6 +128,7 @@ experiments:
 
 run_order:
   - exp_0_simple_cnn_shared_adapters_learned_balance
+  - exp_0b_plain_deep18_no_skip_shared_adapters_learned_balance
   - exp_a_separate
   - exp_b_shared_no_adapters
   - exp_c_shared_adapters

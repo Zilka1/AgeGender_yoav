@@ -171,12 +171,19 @@ def evaluate_checkpoint(
             plot_interval_width_by_bucket(labels, width_by_bucket, plots_dir / f"{output_name}_interval_width_by_bucket.png")
 
         if calibration is not None and "age_metrics_by_bucket_calibrated" in metrics:
+            # The raw q10-q90 interval is nominally an 80% interval by
+            # construction of the quantile head, independent of calibration --
+            # but the *calibrated* interval's target is whatever the
+            # calibration artifact was actually fit for (1 - alpha), which
+            # need not be 0.80 (e.g. alpha=0.10 -> 0.90). Using a hardcoded
+            # 0.80 here would silently mislabel the target line whenever
+            # configs/training.yaml's calibration.alpha differs from 0.10.
             plot_coverage_width_tradeoff(
                 coverage_before=metrics["interval_coverage"],
                 width_before=metrics["mean_interval_width"],
                 coverage_after=metrics["interval_coverage_calibrated"],
                 width_after=metrics["mean_interval_width_calibrated"],
-                target_coverage=0.80,
+                target_coverage=calibration.get("target_coverage", 0.80),
                 out_path=plots_dir / f"{output_name}_coverage_width_tradeoff.png",
             )
 
@@ -199,8 +206,16 @@ def evaluate_checkpoint(
             knn = KNNEmbeddingBaseline.load(resolved_knn_path)
             knn_metrics = _evaluate_knn(model, dataset, device, knn, confidence_threshold)
             table = build_parametric_vs_knn_table(metrics, knn_metrics)
-            table.to_csv(REPO_ROOT / "outputs" / "knn" / "parametric_vs_knn.csv", index=False)
-            logger.info("Saved parametric-vs-kNN comparison table")
+            # Saved under this checkpoint's own output_dir (isolated per
+            # experiment/seed), never a single shared global path -- two
+            # experiments evaluated with --compare-knn must not overwrite
+            # each other's comparison table.
+            knn_dir = output_dir / "knn"
+            knn_dir.mkdir(parents=True, exist_ok=True)
+            knn_table_path = knn_dir / f"{output_name}_parametric_vs_knn.csv"
+            table.to_csv(knn_table_path, index=False)
+            metrics["knn_comparison_table_path"] = str(knn_table_path)
+            logger.info("Saved parametric-vs-kNN comparison table to %s", knn_table_path)
 
     save_json(metrics, metrics_dir / f"{output_name}.json")
     logger.info("Evaluation metrics: %s", {k: v for k, v in metrics.items() if not isinstance(v, dict)})

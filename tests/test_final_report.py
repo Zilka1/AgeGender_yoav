@@ -10,8 +10,9 @@ uncertainty metrics, robustness summary, and parameter/latency comparison.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
-from src.evaluation.final_report import generate_final_results_report
+from src.evaluation.final_report import generate_final_results_report, save_final_results_report
 
 
 def _write_json(path, data):
@@ -68,3 +69,55 @@ def test_report_picks_up_seed_runs_and_bucket_metrics(tmp_path):
     assert "a.jpg" in report and "b.jpg" in report
     # exp_c has 2 real seed runs on disk -- a real mean +/- std should be rendered.
     assert "+/-" in report
+
+
+def test_report_does_not_crash_when_plots_live_outside_report_dir(tmp_path):
+    """Regression test: outputs_dir/plots must not need to be a subpath of
+    report_dir (e.g. a notebook's RUN_DIR is entirely outside the repo
+    checkout) -- Path.relative_to would raise ValueError here; the fix
+    uses os.path.relpath, which handles unrelated absolute paths."""
+    # outputs_dir and report_dir are siblings, neither nested in the other --
+    # exactly the RUN_DIR-vs-REPO_DIR relationship in the real notebooks.
+    outputs_dir = tmp_path / "run_dir"
+    report_dir = tmp_path / "somewhere_else" / "reports"
+    report_dir.mkdir(parents=True)
+
+    metrics_dir = outputs_dir / "metrics"
+    plots_dir = outputs_dir / "plots"
+    _write_json(
+        metrics_dir / "exp_d_shared_adapters_learned_balance_test_metrics.json",
+        {
+            "age_mae": 5.2,
+            "age_metrics_by_bucket": {"0-10": {"count": 5, "mae": 2.1, "coverage": 0.8, "mean_width": 8.0, "median_width": 7.5}},
+        },
+    )
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    (plots_dir / "exp_d_shared_adapters_learned_balance_test_metrics_interval_coverage.png").write_bytes(b"fake-png-bytes")
+
+    report = generate_final_results_report(outputs_dir, report_dir)
+
+    assert "interval_coverage.png" in report
+    assert "![" in report
+
+
+def test_save_final_results_report_writes_working_relative_links(tmp_path):
+    outputs_dir = tmp_path / "outputs"
+    docs_dir = tmp_path / "docs"
+    metrics_dir = outputs_dir / "metrics"
+    plots_dir = outputs_dir / "plots"
+    _write_json(
+        metrics_dir / "exp_d_shared_adapters_learned_balance_test_metrics.json",
+        {"age_mae": 5.2, "age_metrics_by_bucket": {}},
+    )
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    (plots_dir / "exp_d_shared_adapters_learned_balance_test_metrics_interval_coverage.png").write_bytes(b"fake-png-bytes")
+
+    out_path = save_final_results_report(outputs_dir, docs_dir)
+    assert out_path.exists()
+
+    report_text = out_path.read_text(encoding="utf-8")
+    for line in report_text.splitlines():
+        if line.startswith("!["):
+            rel_path = line.split("(", 1)[1].rstrip(")")
+            resolved = (out_path.parent / rel_path).resolve()
+            assert resolved.exists(), f"broken image link: {rel_path} from {out_path.parent}"

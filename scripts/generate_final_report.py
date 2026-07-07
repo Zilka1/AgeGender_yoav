@@ -30,7 +30,7 @@ logger = get_logger("scripts.generate_final_report")
 
 
 def main() -> int:
-    report_path = save_final_results_report(REPO_ROOT / "outputs", REPO_ROOT / "docs", REPO_ROOT)
+    report_path = save_final_results_report(REPO_ROOT / "outputs", REPO_ROOT / "docs")
     logger.info("Saved final results report to %s", report_path)
     print(f"Saved final results report to {report_path}")
     return 0

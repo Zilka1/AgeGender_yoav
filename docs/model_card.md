@@ -4,7 +4,7 @@
 
 **Name:** face-multitask-research multi-task age / dataset gender-label model
 **Type:** Convolutional multi-task regression + classification model
-**Backbone:** Manually implemented ResNet-18 (`src/models/custom_resnet.py`), no pretrained ImageNet weights, no `torchvision.models`/`timm`/model-hub dependency anywhere in the codebase. A non-residual `SimpleCNNBackbone` (`src/models/simple_cnn.py`) also exists solely as a controlled ablation baseline (Experiment 0) to isolate the value of residual connections -- it is never the project's main backbone and is not used by the deployed API.
+**Backbone:** Manually implemented ResNet-18 (`src/models/custom_resnet.py`), no pretrained ImageNet weights, no `torchvision.models`/`timm`/model-hub dependency anywhere in the codebase. Two controlled ablation baselines also exist, neither ever the project's main backbone nor used by the deployed API: a non-residual `SimpleCNNBackbone` (`src/models/simple_cnn.py`, Experiment 0, differs in depth/width *and* residual connections -- an efficiency/accuracy trade-off comparison) and `PlainDeep18NoSkip` (`src/models/plain_deep18_no_skip.py`, Experiment 0b, depth/width-matched to Custom ResNet-18 with only the residual additions removed -- the actual residual-connections ablation). See `docs/experiment_plan.md` and `scripts/compare_backbones.py`.
 **Intended use:** Research and educational demonstration of multi-task learning, shared representations, adapters, uncertainty estimation, and explainability techniques on face-image datasets.
 
 ## Intended use and non-intended use
@@ -50,6 +50,15 @@ A wide interval is not a defect -- it is the model expressing genuine uncertaint
 ## Abstention behavior
 
 The gender-label head returns **"Not sure"** instead of a class label whenever its top softmax probability is below `confidence_threshold` (default 0.80, in `configs/model.yaml`'s `gender_head` and mirrored in `configs/api.yaml`). This is a deliberate design choice: a low-confidence guess presented as if it were a normal prediction is more misleading than an explicit "the model doesn't know." Abstention rate is tracked as a first-class evaluation metric (`abstention_rate` in `src/evaluation/metrics.py`) alongside accuracy, including under image corruption (`scripts/run_robustness.py`) -- a model that abstains more often under blur/noise/occlusion is behaving correctly, not failing. Abstention applies **only** to the gender-label head; the age head always returns a point estimate and interval (there is no "Not sure" state for age), so the interval width itself is the age head's analogous signal of low confidence.
+
+**Four related-but-distinct numbers, all reported wherever gender-label performance is measured (`src/evaluation/metrics.py`, `src/evaluation/backbone_comparison.py`):**
+
+- **Selective accuracy** (`gender_accuracy`): accuracy computed only over samples the model actually answered (denominator excludes abstentions). This is "how good is the model when it commits to an answer."
+- **Coverage** (`gender_coverage`): the fraction of samples the model actually answers, `1 - abstention_rate`.
+- **Abstention rate** (`abstention_rate`): `1 - coverage` -- the fraction returned as "Not sure."
+- **Effective accuracy** (`gender_effective_accuracy`): correct-and-accepted predictions divided by *all* samples (denominator includes abstentions). This is "how often does a user actually get a correct answer out of everything they asked."
+
+A model can have excellent selective accuracy while abstaining on every difficult case, which would look poor on effective accuracy -- reporting only selective accuracy would hide that trade-off, so both numbers (plus coverage/abstention) are always reported together rather than either alone.
 
 ## Face-detection limitations
 

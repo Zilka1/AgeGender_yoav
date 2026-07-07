@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from src.evaluation.metrics import age_uncertainty_by_bucket, select_interval_examples
+from src.evaluation.metrics import (
+    age_error_percentiles, age_tail_error_rates, age_uncertainty_by_bucket, gender_coverage,
+    gender_effective_accuracy, select_interval_examples,
+)
 
 
 def test_age_uncertainty_by_bucket_computes_coverage_and_width_per_bucket():
@@ -73,3 +76,49 @@ def test_select_interval_examples_record_fields():
     assert record == {
         "image_path": "only.jpg", "true_age": 42.0, "q10": 40.0, "q50": 42.0, "q90": 45.0, "width": 5.0,
     }
+
+
+def test_age_error_percentiles_matches_numpy_percentile():
+    y_true = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+    y_pred = np.array([12.0, 18.0, 35.0, 30.0, 90.0])  # errors: 2, 2, 5, 10, 40
+    result = age_error_percentiles(y_true, y_pred)
+    errors = np.array([2.0, 2.0, 5.0, 10.0, 40.0])
+    assert abs(result["median"] - float(np.median(errors))) < 1e-9
+    assert abs(result["p90"] - float(np.percentile(errors, 90))) < 1e-9
+    assert abs(result["p95"] - float(np.percentile(errors, 95))) < 1e-9
+
+
+def test_age_tail_error_rates_counts_fractions_above_each_threshold():
+    y_true = np.array([0.0, 0.0, 0.0, 0.0])
+    y_pred = np.array([3.0, 7.0, 12.0, 22.0])  # errors: 3, 7, 12, 22
+    result = age_tail_error_rates(y_true, y_pred, thresholds=(5, 10, 15, 20))
+    assert result[">5"] == 0.75   # 7, 12, 22 exceed 5
+    assert result[">10"] == 0.5   # 12, 22 exceed 10
+    assert result[">15"] == 0.25  # only 22 exceeds 15
+    assert result[">20"] == 0.25  # only 22 exceeds 20
+
+
+def test_gender_coverage_is_one_minus_abstention_rate():
+    abstain = np.array([True, False, False, False])
+    assert gender_coverage(abstain) == 0.75
+
+
+def test_gender_effective_accuracy_denominator_includes_abstentions():
+    y_true = np.array([0, 1, 0, 1])
+    y_pred = np.array([0, 1, 1, 0])  # first two correct, last two wrong
+    abstain = np.array([False, False, False, True])  # last sample abstained (also wrong if answered)
+    # Effective accuracy = correct-and-accepted / all = 2 / 4 = 0.5
+    assert gender_effective_accuracy(y_true, y_pred, abstain) == 0.5
+
+
+def test_gender_effective_accuracy_lower_than_selective_accuracy_when_abstaining_on_hard_cases():
+    from src.evaluation.metrics import gender_accuracy
+
+    y_true = np.array([0, 1, 0, 1, 0])
+    y_pred = np.array([0, 1, 1, 0, 1])  # only first two are actually correct
+    abstain = np.array([False, False, True, True, True])  # abstains on all three wrong cases
+    selective_acc = gender_accuracy(y_true, y_pred, abstain)  # accuracy among accepted only: 2/2 = 1.0
+    effective_acc = gender_effective_accuracy(y_true, y_pred, abstain)  # 2/5 = 0.4
+    assert selective_acc == 1.0
+    assert effective_acc == 0.4
+    assert effective_acc < selective_acc

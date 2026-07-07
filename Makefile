@@ -1,6 +1,7 @@
 .PHONY: install test download-data prepare-data pretrain train experiments \
         calibrate build-knn evaluate robustness gradcam architecture-report \
-        run-seeds final-report demo-images demo-readiness demo api frontend
+        run-seeds final-report demo-images demo-readiness demo compare-backbones \
+        api frontend
 
 PYTHON ?= python
 CHECKPOINT ?= checkpoints/multitask_best_balanced_score.pt
@@ -53,6 +54,12 @@ run-seeds:
 
 final-report:
 	$(PYTHON) scripts/generate_final_report.py
+
+# Example: make compare-backbones CHECKPOINTS="simple_cnn=checkpoints/exp_0_..._best_balanced_score.pt custom_resnet18=checkpoints/exp_d_..._best_balanced_score.pt" RESNET_NAME=custom_resnet18
+CHECKPOINTS ?= simple_cnn=checkpoints/exp_0_simple_cnn_shared_adapters_learned_balance_best_balanced_score.pt custom_resnet18=checkpoints/exp_d_shared_adapters_learned_balance_best_balanced_score.pt
+RESNET_NAME ?= custom_resnet18
+compare-backbones:
+	$(PYTHON) scripts/compare_backbones.py $(foreach c,$(CHECKPOINTS),--checkpoint $(c)) --resnet-name $(RESNET_NAME)
 
 demo-images:
 	$(PYTHON) scripts/generate_demo_images.py

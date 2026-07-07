@@ -15,9 +15,32 @@ and do task-specific bottleneck adapters plus learned uncertainty-based
 loss balancing reduce negative transfer relative to naive sharing or fully
 independent backbones? Separately: how does a non-parametric k-NN
 classifier/regressor in the learned embedding space compare to the
-parametric heads, and does the Custom ResNet-18's residual design itself
-provide measurable value over a conventional non-residual CNN of
-otherwise comparable capacity?
+parametric heads?
+
+**Does the residual design itself provide measurable value?** This
+question splits into two *distinct* claims, deliberately answered by two
+separate controlled experiments (see `scripts/compare_backbones.py` and
+`docs/architecture_analysis.md`):
+
+1. **SimpleCNN vs. Custom ResNet-18 (Experiment 0 vs. D)** -- "is the
+   larger residual architecture justified relative to a compact CNN?"
+   SimpleCNN differs from Custom ResNet-18 in depth, stage widths, *and*
+   the presence of skip connections all at once, so this is an
+   **efficiency/accuracy trade-off** comparison, not a clean ablation of
+   residual connections specifically. A ResNet win here could be explained
+   by depth/width alone, with skip connections contributing nothing.
+2. **PlainDeep18NoSkip vs. Custom ResNet-18 (Experiment 0b vs. D)** --
+   "what is the contribution of residual skip connections when depth and
+   width are held fixed?" PlainDeep18NoSkip
+   (`src/models/plain_deep18_no_skip.py`) copies Custom ResNet-18's stem,
+   stage widths, block layout, embedding size, and training recipe exactly,
+   removing only the residual additions (and, unavoidably, the
+   downsample-shortcut parameters that only exist to support them -- see
+   Experiment 0b below for the exact count). This *is* a clean ablation of
+   residual connections specifically.
+
+**Do not treat a SimpleCNN-vs-ResNet result alone as evidence that residual
+connections help** -- only Experiment 0b vs. D isolates that variable.
 
 ## Experiment 0 -- Plain CNN backbone baseline (`exp_0_simple_cnn_shared_adapters_learned_balance`)
 
@@ -37,6 +60,37 @@ variables at once to attribute any difference to the backbone. This is
 not intended to be tuned into a competitive standalone architecture, and
 the plain CNN must never be described as this project's main backbone;
 `CustomResNet18` remains that throughout.
+
+## Experiment 0b -- Plain, depth/width-matched, no-skip-connection backbone (`exp_0b_plain_deep18_no_skip_shared_adapters_learned_balance`)
+
+The controlled residual-connections ablation Experiment 0 cannot provide
+(see "Research question" above): `src/models/plain_deep18_no_skip.py`'s
+`PlainDeep18NoSkip` uses the **same** stem, stage widths (64/128/256/512),
+block layout `[2, 2, 2, 2]` (two 3x3 convolutions per block), BatchNorm,
+ReLU placement, embedding size, adapters, heads, learned-uncertainty loss
+balancing, and training recipe as Custom ResNet-18 (Experiment D) -- the
+only change is that `PlainBlock.forward` never adds an identity/projection
+shortcut.
+
+**Unavoidable parameter difference.** Because there is no residual addition,
+there is also no need for the three downsample shortcuts (1x1 conv +
+BatchNorm) Custom ResNet-18 uses at the layer2/layer3/layer4 channel/stride
+transitions -- `PlainDeep18NoSkip` has exactly **173,824 fewer parameters**
+than `CustomResNet18` (11,002,688 vs. 11,176,512 with default
+`stem_channels=64`), matching those three shortcuts' parameter count
+exactly (verified in `tests/test_plain_deep18_no_skip.py`). This is not a
+design choice that favors either architecture; it is what "remove the skip
+connections and nothing else" necessarily implies.
+
+Run via `RUN_PROFILE="backbone_comparison"` in either notebook, or:
+```
+python scripts/run_experiments.py --only exp_0_simple_cnn_shared_adapters_learned_balance,exp_0b_plain_deep18_no_skip_shared_adapters_learned_balance,exp_d_shared_adapters_learned_balance
+python scripts/compare_backbones.py \
+    --checkpoint simple_cnn=checkpoints/exp_0_..._best_balanced_score.pt \
+    --checkpoint plain_deep18_no_skip=checkpoints/exp_0b_..._best_balanced_score.pt \
+    --checkpoint custom_resnet18=checkpoints/exp_d_..._best_balanced_score.pt \
+    --resnet-name custom_resnet18 --output-dir outputs/backbone_comparison
+```
 
 ## Experiment A -- Separate models (`exp_a_separate`)
 
@@ -89,14 +143,26 @@ because self-supervised pretraining is comparatively compute-hungry (see
 
 ## What "success" would look like (to be judged only from real results)
 
-- **D vs. 0**: if residual connections provide real value, Experiment D
+- **D vs. 0 (efficiency/accuracy trade-off, not a residual-connections
+  ablation)**: if the larger architecture provides real value, Experiment D
   (Custom ResNet-18) should show a meaningfully lower age MAE and/or
   higher gender-label accuracy than Experiment 0 (plain CNN) at a
   comparable or modestly higher parameter/latency cost -- not just a
   cheaper model that happens to be worse. See the auto-generated "Plain
   CNN vs Custom ResNet-18 Backbone Comparison" section of
   `docs/architecture_analysis_generated.md` for the actual numbers and a
-  factual (non-causal) one-sentence summary.
+  factual (non-causal) one-sentence summary. This comparison alone does
+  **not** establish that residual connections specifically are what helps
+  (see D vs. 0b below).
+- **D vs. 0b (the actual residual-connections ablation)**: `scripts/compare_backbones.py`'s
+  "Is Additional Residual Complexity Justified?" section reports this
+  honestly and conditionally -- it credits ResNet only when a paired
+  bootstrap confidence interval for the AURC (area under the risk-coverage
+  curve, gender or age selective prediction) excludes zero in ResNet's
+  favor, and explicitly states the compact/plain alternative is preferred
+  when results are tied or favor it. A single-seed difference, even if
+  numerically in ResNet's favor, is never reported as decisive; see the
+  mean +/- std table across >= 3 seeds for stability evidence first.
 - **B vs. A**: shared backbone should not be meaningfully worse than
   separate backbones at a fraction of the parameters, ideally similar or
   better on at least one task (evidence of positive transfer).

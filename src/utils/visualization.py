@@ -225,6 +225,72 @@ def plot_mean_std_bar(labels: list[str], means: np.ndarray, stds: np.ndarray, me
     return _save(fig, out_path)
 
 
+def plot_pareto(
+    labels: list[str], x_values: list[float], y_values: list[float],
+    x_label: str, y_label: str, title: str, out_path: str | Path,
+) -> Path:
+    """Scatter plot with one labeled point per model -- e.g. age MAE vs. parameter count/latency."""
+    fig, ax = plt.subplots(figsize=(6, 5))
+    cmap = plt.get_cmap("tab10")
+    for i, (label, x, y) in enumerate(zip(labels, x_values, y_values)):
+        ax.scatter([x], [y], s=90, color=cmap(i % 10), label=label, zorder=3)
+        ax.annotate(label, (x, y), textcoords="offset points", xytext=(6, 6), fontsize=8)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.set_title(title)
+    ax.grid(alpha=0.3)
+    return _save(fig, out_path)
+
+
+def plot_risk_coverage_curves(curves: dict[str, tuple[np.ndarray, np.ndarray]], y_label: str, title: str, out_path: str | Path) -> Path:
+    """One risk-vs-coverage line per model. ``curves`` maps model label -> (coverages, risks)."""
+    fig, ax = plt.subplots(figsize=(6.5, 5))
+    for label, (coverages, risks) in curves.items():
+        ax.plot(coverages, risks, marker="o", markersize=3, label=label)
+    ax.set_xlabel("Coverage (fraction of samples accepted)")
+    ax.set_ylabel(y_label)
+    ax.set_title(title)
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+    return _save(fig, out_path)
+
+
+def plot_age_error_cdf(errors_by_model: dict[str, np.ndarray], out_path: str | Path) -> Path:
+    """Empirical CDF of absolute age error, one curve per model."""
+    fig, ax = plt.subplots(figsize=(6.5, 5))
+    for label, errors in errors_by_model.items():
+        sorted_errors = np.sort(errors)
+        cumulative = np.arange(1, len(sorted_errors) + 1) / len(sorted_errors)
+        ax.plot(sorted_errors, cumulative, label=label)
+    ax.set_xlabel("Absolute age error (years)")
+    ax.set_ylabel("Cumulative fraction of samples")
+    ax.set_title("CDF of absolute age error")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+    return _save(fig, out_path)
+
+
+def plot_tail_error_bars(tail_rates_by_model: dict[str, dict[str, float]], out_path: str | Path) -> Path:
+    """Grouped bar chart of error-tail rates (e.g. >5/>10/>15/>20 years) per model."""
+    models = list(tail_rates_by_model.keys())
+    thresholds = list(next(iter(tail_rates_by_model.values())).keys())
+    x = np.arange(len(thresholds))
+    width = 0.8 / max(1, len(models))
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    cmap = plt.get_cmap("tab10")
+    for i, model in enumerate(models):
+        rates = [tail_rates_by_model[model][t] for t in thresholds]
+        ax.bar(x + i * width, rates, width, label=model, color=cmap(i % 10))
+    ax.set_xticks(x + width * (len(models) - 1) / 2)
+    ax.set_xticklabels(thresholds)
+    ax.set_xlabel("Absolute age error threshold")
+    ax.set_ylabel("Fraction of samples exceeding threshold")
+    ax.set_title("Tail-error rates by model")
+    ax.legend(fontsize=8)
+    return _save(fig, out_path)
+
+
 def save_gradcam_overlay(image_rgb: np.ndarray, heatmap: np.ndarray, out_path: str | Path, title: str) -> Path:
     fig, axes = plt.subplots(1, 2, figsize=(7, 3.5))
     axes[0].imshow(image_rgb)

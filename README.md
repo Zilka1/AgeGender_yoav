@@ -365,11 +365,94 @@ python scripts/generate_architecture_report.py --checkpoint checkpoints/exp_d_sh
 ```
 
 Backbone selection is config-driven (`model.backbone.name:
-custom_resnet18 | simple_cnn` in `configs/model.yaml`); both backbones
-expose the same `forward` / `forward_features` (`layer1`-`layer4`, for
-Grad-CAM compatibility) / `num_parameters` interface, so the rest of the
-pipeline (adapters, heads, trainer, evaluation, inference, Grad-CAM) is
-unmodified by which one is active.
+custom_resnet18 | simple_cnn | plain_deep18_no_skip` in `configs/model.yaml`);
+all three backbones expose the same `forward` / `forward_features`
+(`layer1`-`layer4`, for Grad-CAM compatibility) / `num_parameters`
+interface, so the rest of the pipeline (adapters, heads, trainer,
+evaluation, inference, Grad-CAM) is unmodified by which one is active.
+
+**Important caveat.** SimpleCNN also differs from Custom ResNet-18 in
+depth and stage widths, not only in the absence of skip connections -- so
+Experiment 0 vs. D is an **efficiency/accuracy trade-off** comparison, not
+a clean test of whether residual connections themselves help. Do not treat
+a ResNet win here as evidence that skip connections are what caused it.
+
+### PlainDeep18NoSkip vs. Custom ResNet-18 (Experiment 0b): the actual residual-connections ablation
+
+`src/models/plain_deep18_no_skip.py`'s `PlainDeep18NoSkip` copies Custom
+ResNet-18's stem, stage widths, block layout `[2, 2, 2, 2]`, embedding
+size, and training recipe *exactly*, removing only the residual additions
+-- so any difference here is attributable to skip connections specifically,
+holding depth/width fixed. See `docs/experiment_plan.md` for the exact
+(unavoidable) parameter difference this implies (173,824 parameters --
+the three downsample shortcuts residual connections require and this
+backbone doesn't).
+
+```bash
+# Train all three backbones for the full comparison suite
+python scripts/run_experiments.py --only exp_0_simple_cnn_shared_adapters_learned_balance,exp_0b_plain_deep18_no_skip_shared_adapters_learned_balance,exp_d_shared_adapters_learned_balance
+```
+
+### Comprehensive backbone comparison suite (`scripts/compare_backbones.py`)
+
+Post-hoc analysis across two or more already-trained checkpoints --
+**never retrains**, only re-runs inference (a single forward pass per
+test-set image) against each checkpoint's own test split:
+
+```bash
+python scripts/compare_backbones.py \
+    --checkpoint simple_cnn=checkpoints/exp_0_..._best_balanced_score.pt \
+    --checkpoint plain_deep18_no_skip=checkpoints/exp_0b_..._best_balanced_score.pt \
+    --checkpoint custom_resnet18=checkpoints/exp_d_..._best_balanced_score.pt \
+    --calibration-dir simple_cnn=outputs/calibration/exp_0 \
+    --calibration-dir plain_deep18_no_skip=outputs/calibration/exp_0b \
+    --calibration-dir custom_resnet18=outputs/calibration/exp_d \
+    --robustness-csv simple_cnn=outputs/robustness/exp_0/robustness_results.csv \
+    --robustness-csv custom_resnet18=outputs/robustness/exp_d/robustness_results.csv \
+    --resnet-name custom_resnet18 \
+    --output-dir outputs/backbone_comparison
+```
+
+Produces, under `--output-dir`:
+
+- `clean_test_summary.csv` -- age MAE/RMSE, median/p90/p95 absolute age
+  error, error-tail rates (>5/>10/>15/>20 years), raw and calibrated
+  interval coverage/width, gender-label **selective accuracy** (correct /
+  accepted only), **coverage** (fraction answered, `1 - abstention_rate`),
+  and **effective accuracy** (correct-and-accepted / *all* samples,
+  denominator includes abstentions) -- plus parameter counts and latency.
+  Selective accuracy can look excellent while effective accuracy is
+  mediocre if a model abstains constantly; both numbers are reported so
+  this can't be hidden. `plots/pareto_params_vs_mae.png` and
+  `pareto_latency_vs_mae.png` visualize the trade-off.
+- `gender_risk_at_coverage.csv`, `gender_aurc.json`,
+  `gender_pairwise_bootstrap.json`, `plots/gender_risk_coverage.png` --
+  gender selective-risk-vs-coverage curves (confidence = max class
+  probability), AURC (lower is better), risk at 80/90/95/98% coverage, and
+  paired-bootstrap confidence intervals for the ResNet-vs-other difference
+  at each coverage level (models are always compared at the *same*
+  coverage, never at independent arbitrary thresholds).
+- `age_selective_mae_at_coverage.csv`, `age_selective_aurc.json`,
+  `age_pairwise_bootstrap.json`, `plots/age_risk_coverage_{mae,rmse}.png`
+  -- the same analysis for age, using q90-q10 interval width as the
+  confidence score (narrower = more confident).
+- `age_bucket_mae.csv`, `age_error_percentiles.json`,
+  `plots/age_error_cdf.png`, `plots/age_tail_error_rates.png` -- per-age-bucket
+  MAE (0-12/13-19/20-34/35-49/50-64/65+), the empirical CDF of absolute
+  age error per model, and error-tail-rate bars -- answers whether ResNet
+  reduces catastrophic errors even when average MAE is similar.
+- `robustness_degradation_<model>.csv`, `robustness_diff_table.csv`
+  (when `--robustness-csv` is given per model) -- delta and relative
+  (%) degradation from the clean baseline per corruption/severity, plus a
+  direct model-vs-model difference table.
+- `final_interpretation.md` -- "Is Additional Residual Complexity
+  Justified?": credits ResNet only when a paired-bootstrap CI excludes
+  zero in its favor, and explicitly states the compact/plain alternative
+  is preferred otherwise. Never treats a single-seed difference as
+  decisive.
+
+Both notebooks (`notebooks/train_evaluate_*.ipynb`) run this automatically
+when `RUN_PROFILE = "backbone_comparison"`.
 
 ## Conformal calibration
 
@@ -403,7 +486,13 @@ and gender-label embedding spaces, and saves it to
 make evaluate CHECKPOINT=checkpoints/<your_checkpoint>.pt
 ```
 
-(`scripts/evaluate.py --compare-knn`, producing `outputs/knn/parametric_vs_knn.csv`).
+(`scripts/evaluate.py --compare-knn`, producing
+`{output_dir}/knn/{output_name}_parametric_vs_knn.csv` -- isolated per
+checkpoint/experiment under that checkpoint's own configured output
+directory, never a single shared global path, so evaluating multiple
+checkpoints with `--compare-knn` never overwrites another experiment's
+comparison table. The saved metrics JSON also records this exact path
+under `knn_comparison_table_path`, so downstream code never has to guess it).
 
 ## Robustness evaluation
 
@@ -420,7 +509,16 @@ low/high contrast, grayscale conversion, partial occlusion, partial crop.
 For every condition, reports age MAE, gender-label accuracy, abstention
 rate, confidence, and interval width, compared against the clean
 baseline. Saves `outputs/robustness/robustness_results.csv`, plots,
-sample corrupted images, and a Markdown summary.
+sample corrupted images, and a Markdown summary. Every corruption is
+deterministic for a fixed seed (`configs/robustness.yaml: robustness.seed`),
+so the same corrupted images are shown to every model compared.
+
+For a multi-model comparison, `src/evaluation/robustness.py` additionally
+provides `compute_degradation()` (adds `{metric}_delta` and
+`{metric}_pct_change` columns relative to the clean row) and
+`build_robustness_diff_table()` (a direct model-vs-model difference table)
+-- both are wired into `scripts/compare_backbones.py --robustness-csv`
+(see "Comprehensive backbone comparison suite" above).
 
 ## Grad-CAM explainability
 
@@ -540,12 +638,61 @@ Both notebooks are pure orchestration around this repository's real
 evaluation logic. Each run gets its own timestamped, non-overwriting run
 directory (`config/`, `logs/`, `tests/`, `checkpoints/`, `metrics/`,
 `plots/`, `calibration/`, `reports/`, `manifests/`, `archives/`,
-`experiments/<name>/seed_<seed>/`, ...), is restart-safe (an already-complete
-experiment is reused unless `FORCE_RERUN=True`), and defaults to
-`RUN_PROFILE="core"` (the two-experiment CNN-vs-ResNet comparison, 30 max
-epochs, patience 8, seed 42). See each notebook's first two cells for the
-full configuration options (`RUN_PROFILE`, `SEEDS`, `RUN_ROBUSTNESS`,
-`RUN_GRADCAM`, `RUN_KNN`, `RUN_MULTI_SEED`, etc.).
+`experiments/<name>/seed_<seed>/`, ...), and defaults to `RUN_PROFILE="core"`
+(the two-experiment SimpleCNN-vs-ResNet comparison, 30 max epochs, patience
+8, seed 42). Set `RUN_PROFILE="backbone_comparison"` to also train
+PlainDeep18NoSkip (Experiment 0b) and run the full comparison suite
+(`scripts/compare_backbones.py`) automatically. See each notebook's first
+two cells for the full configuration options (`RUN_PROFILE`, `SEEDS`,
+`RUN_ROBUSTNESS`, `RUN_GRADCAM`, `RUN_KNN`, `RUN_MULTI_SEED`, etc.).
+
+**Stage-level restart-safety.** With `FORCE_RERUN=False` and
+`RESUME_RUN_ID` set to a previous run's printed ID, each of training,
+calibration, k-NN index building, and evaluation is independently
+skipped-or-rerun based only on whether *that stage's own* artifact already
+exists -- printed up front as a per-experiment stage plan (e.g. "training:
+skipped, checkpoint found" / "evaluation: rerunning, metrics missing"). A
+failure in a later stage (e.g. evaluation) never triggers retraining a
+checkpoint that already completed successfully. This is not resumption of
+an interrupted training run mid-epoch -- checkpoints in this repository
+never save optimizer state (`src/training/checkpointing.py`), so a stage
+that was interrupted partway through re-runs from its own beginning, not
+from a mid-epoch point.
+
+**Rerunning post-hoc analysis without retraining.** Since training,
+calibration, and evaluation are all skipped once their artifacts exist,
+simply re-running the notebook with the same `RESUME_RUN_ID` and
+`FORCE_RERUN=False` re-executes only whatever hasn't been produced yet
+(typically the report/analysis cells) -- nothing upstream is retrained. To
+do the same thing outside a notebook against existing checkpoints:
+```bash
+python scripts/compare_backbones.py \
+    --checkpoint simple_cnn=checkpoints/exp_0_..._best_balanced_score.pt \
+    --checkpoint custom_resnet18=checkpoints/exp_d_..._best_balanced_score.pt \
+    --resnet-name custom_resnet18 --output-dir outputs/backbone_comparison
+python scripts/generate_final_report.py
+```
+
+**Running only the new three-seed backbone comparison.** Set
+`RUN_PROFILE="backbone_comparison"` and `RUN_MULTI_SEED=True` (with
+`SEEDS=[42, 123, 2026]`, the default) in either notebook's configuration
+cell -- section 16 will then train Experiments 0/0b/D at all three seeds
+and save `reports/multiseed_summary.{csv,md}`. Outside a notebook:
+```bash
+python scripts/run_seeds.py --experiment exp_0_simple_cnn_shared_adapters_learned_balance --seeds 42,123,2026
+python scripts/run_seeds.py --experiment exp_0b_plain_deep18_no_skip_shared_adapters_learned_balance --seeds 42,123,2026
+python scripts/run_seeds.py --experiment exp_d_shared_adapters_learned_balance --seeds 42,123,2026
+```
+
+**Running only robustness evaluation** (checkpoints already trained):
+```bash
+python scripts/run_robustness.py --checkpoint checkpoints/exp_0_..._best_balanced_score.pt
+python scripts/run_robustness.py --checkpoint checkpoints/exp_d_..._best_balanced_score.pt
+```
+Or in a notebook: set `RUN_ROBUSTNESS=True` and the other `RUN_*` optional
+flags to `False`, then re-run with `RESUME_RUN_ID` set and
+`FORCE_RERUN=False` -- training/calibration/evaluation are skipped (already
+complete) and only the robustness cell executes.
 
 ## Example API requests
 

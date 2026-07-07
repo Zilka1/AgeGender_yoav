@@ -12,6 +12,7 @@ import io
 import random
 
 import numpy as np
+import pandas as pd
 from PIL import Image, ImageEnhance, ImageFilter
 
 CORRUPTION_NAMES = (
@@ -220,3 +221,67 @@ def evaluate_condition(
         metrics["abstention_rate"] = abstention_rate(abstain[gender_valid])
         metrics["mean_confidence"] = float(confidence[gender_valid].mean())
     return metrics
+
+
+_DEGRADATION_METRICS = ("age_mae", "age_rmse", "interval_coverage", "mean_interval_width", "gender_accuracy", "abstention_rate")
+
+
+def compute_degradation(results_df: pd.DataFrame, metrics: tuple[str, ...] = _DEGRADATION_METRICS) -> pd.DataFrame:
+    """Add ``{metric}_delta`` and ``{metric}_pct_change`` columns relative to the clean row.
+
+    ``delta = corrupted_value - clean_value``; ``pct_change`` is
+    ``delta / clean_value * 100`` (``NaN`` when the clean value is 0, to
+    avoid a divide-by-zero fabricating an infinite/undefined percentage).
+    The clean row itself gets ``delta=0`` / ``pct_change=0`` for every
+    metric, since it is being compared against itself.
+    """
+    df = results_df.copy()
+    clean_rows = df[df["corruption"] == "clean"]
+    if clean_rows.empty:
+        raise ValueError("results_df has no 'clean' baseline row to compute degradation against")
+    clean_row = clean_rows.iloc[0]
+
+    for metric in metrics:
+        if metric not in df.columns:
+            continue
+        clean_value = clean_row.get(metric)
+        if clean_value is None or (isinstance(clean_value, float) and clean_value != clean_value):
+            df[f"{metric}_delta"] = float("nan")
+            df[f"{metric}_pct_change"] = float("nan")
+            continue
+        df[f"{metric}_delta"] = df[metric] - clean_value
+        df[f"{metric}_pct_change"] = (
+            (df[metric] - clean_value) / clean_value * 100.0 if clean_value != 0 else float("nan")
+        )
+    return df
+
+
+def build_robustness_diff_table(results_by_model: dict[str, pd.DataFrame], metrics: tuple[str, ...] = _DEGRADATION_METRICS) -> pd.DataFrame:
+    """One row per (corruption, severity), columns = each model's value and the direct model-vs-model difference.
+
+    Requires exactly two models (the direct ResNet-vs-CNN comparison the
+    spec asks for); with more than two, only the first two (by dict
+    insertion order) are compared directly, since a single "difference"
+    column is only meaningful pairwise.
+    """
+    names = list(results_by_model)
+    if len(names) < 2:
+        raise ValueError("build_robustness_diff_table needs at least two models to compare")
+    name_a, name_b = names[0], names[1]
+    df_a = results_by_model[name_a].set_index(["corruption", "severity"])
+    df_b = results_by_model[name_b].set_index(["corruption", "severity"])
+
+    rows = []
+    for key in df_a.index:
+        if key not in df_b.index:
+            continue
+        row = {"corruption": key[0], "severity": key[1]}
+        for metric in metrics:
+            if metric not in df_a.columns or metric not in df_b.columns:
+                continue
+            value_a, value_b = df_a.loc[key, metric], df_b.loc[key, metric]
+            row[f"{name_a}_{metric}"] = value_a
+            row[f"{name_b}_{metric}"] = value_b
+            row[f"diff_{metric}_({name_b}_minus_{name_a})"] = value_b - value_a
+        rows.append(row)
+    return pd.DataFrame(rows)

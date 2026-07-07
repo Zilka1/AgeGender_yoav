@@ -40,6 +40,53 @@ def expected_calibration_error_intervals(y_true: np.ndarray, q_low: np.ndarray, 
     return float(abs(empirical - target_coverage))
 
 
+def age_absolute_errors(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+    return np.abs(y_true - y_pred)
+
+
+def age_error_percentiles(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+    """Median / 90th / 95th percentile of absolute age error.
+
+    Complements age_mae/age_rmse (both mean-based, sensitive to a handful
+    of large errors) with distributional detail: two models can share a
+    similar MAE while one has a much heavier error tail.
+    """
+    errors = age_absolute_errors(y_true, y_pred)
+    return {
+        "median": float(np.median(errors)),
+        "p90": float(np.percentile(errors, 90)),
+        "p95": float(np.percentile(errors, 95)),
+    }
+
+
+def age_tail_error_rates(
+    y_true: np.ndarray, y_pred: np.ndarray, thresholds: tuple[int, ...] = (5, 10, 15, 20),
+) -> dict[str, float]:
+    """Fraction of samples with absolute age error exceeding each threshold (years)."""
+    errors = age_absolute_errors(y_true, y_pred)
+    return {f">{t}": float(np.mean(errors > t)) for t in thresholds}
+
+
+def gender_coverage(abstain_mask: np.ndarray) -> float:
+    """Fraction of samples the model actually answers (1 - abstention_rate)."""
+    return float(1.0 - np.mean(abstain_mask))
+
+
+def gender_effective_accuracy(y_true: np.ndarray, y_pred: np.ndarray, abstain_mask: np.ndarray) -> float:
+    """Correct *accepted* predictions / all samples (denominator includes abstentions).
+
+    Distinct from gender_accuracy (selective accuracy: correct / accepted
+    only, denominator excludes abstentions). A model that abstains on
+    every hard case can have high selective accuracy but low effective
+    accuracy -- this metric is what actually gets a usable answer right,
+    out of everything it was asked.
+    """
+    if len(y_true) == 0:
+        return float("nan")
+    accepted_correct = (y_true == y_pred) & (~abstain_mask)
+    return float(np.sum(accepted_correct) / len(y_true))
+
+
 
 
 def age_uncertainty_by_bucket(

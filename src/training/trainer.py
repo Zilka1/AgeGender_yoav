@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import csv
+import datetime
+import json
 import logging
 import time
 from pathlib import Path
@@ -54,6 +57,7 @@ class Trainer:
         checkpoint_dir: str | Path = "./checkpoints",
         experiment_name: str = "multitask",
         gender_class_weights: torch.Tensor | None = None,
+        output_dir: str | Path | None = None,
     ) -> None:
         self.model = model.to(device)
         self.config = config
@@ -63,6 +67,24 @@ class Trainer:
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.experiment_name = experiment_name
         self.gender_class_weights = gender_class_weights.to(device) if gender_class_weights is not None else None
+        self.confidence_threshold = config["model"]["gender_head"].get("confidence_threshold", 0.80)
+
+        # Incremental per-epoch artifacts (history.csv/json, a live status
+        # file) default to living alongside the checkpoint directory unless
+        # an explicit output_dir is given -- this is what lets a notebook
+        # recover training progress after a session interruption without
+        # waiting for train() to return.
+        self.output_dir = Path(output_dir) if output_dir is not None else self.checkpoint_dir.parent
+        self.metrics_dir = self.output_dir / "metrics"
+        self.metrics_dir.mkdir(parents=True, exist_ok=True)
+        self.log_dir = self.output_dir / "logs"
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.history_csv_path = self.metrics_dir / f"{experiment_name}_history.csv"
+        self.history_json_path = self.metrics_dir / f"{experiment_name}_history.json"
+        self.status_path = self.log_dir / f"{experiment_name}_status.json"
+
+        self.train_dataset_size = len(train_dataset)
+        self.val_dataset_size = len(val_dataset)
 
         batch_size = self.training_cfg.get("batch_size", 64)
         num_workers = self.training_cfg.get("num_workers", 2)
@@ -76,9 +98,10 @@ class Trainer:
         self.grad_clip_norm = self.training_cfg.get("grad_clip_norm", 1.0)
 
         self.history: dict[str, list[float]] = {
-            "train_loss": [], "val_loss": [], "val_age_mae": [], "val_gender_accuracy": [],
+            "train_loss": [], "val_loss": [], "val_age_mae": [], "val_age_rmse": [], "val_gender_accuracy": [],
+            "val_gender_selective_accuracy": [], "val_gender_coverage": [], "val_gender_abstention": [],
             "age_loss": [], "gender_loss": [], "effective_age_weight": [], "effective_gender_weight": [],
-            "log_var_age": [], "log_var_gender": [],
+            "log_var_age": [], "log_var_gender": [], "lr": [], "epoch_time_seconds": [],
         }
         self.epoch_times: list[float] = []
 
@@ -100,6 +123,8 @@ class Trainer:
         eff_age_w, eff_gender_w, lv_age, lv_gender = 0.0, 0.0, 0.0, 0.0
         age_abs_errors = []
         gender_correct, gender_total = 0, 0
+        gender_correct_accepted, gender_total_accepted = 0, 0
+        gender_confidences = []
 
         loss_cfg = self.config["model"]["loss_balancing"]
         mode = loss_cfg["mode"]
@@ -158,9 +183,25 @@ class Trainer:
                 with torch.no_grad():
                     valid = gender_mask.bool()
                     if valid.any():
-                        preds = outputs["gender_logits"][valid].argmax(dim=-1)
-                        gender_correct += (preds == gender_target[valid]).sum().item()
+                        probs = torch.softmax(outputs["gender_logits"][valid], dim=-1)
+                        preds = probs.argmax(dim=-1)
+                        confidence = probs.max(dim=-1).values
+                        correct = preds == gender_target[valid]
+                        gender_correct += correct.sum().item()
                         gender_total += int(valid.sum().item())
+                        # Selective accuracy/coverage/abstention (confidence-threshold aware) are
+                        # tracked purely for the live console line / history.csv -- checkpoint
+                        # selection (_balanced_score, BestMetricTracker) always uses the raw,
+                        # non-abstention-aware "gender_accuracy" below, unchanged from before.
+                        accepted = confidence >= self.confidence_threshold
+                        gender_correct_accepted += (correct & accepted).sum().item()
+                        gender_total_accepted += int(accepted.sum().item())
+                        gender_confidences.append(confidence.detach().cpu())
+
+        gender_abstention_value = float("nan")
+        if gender_confidences:
+            all_confidence = torch.cat(gender_confidences)
+            gender_abstention_value = float((all_confidence < self.confidence_threshold).float().mean().item())
 
         metrics = {
             "loss": total_loss / max(1, n_batches),
@@ -171,7 +212,15 @@ class Trainer:
             "log_var_age": lv_age / max(1, n_age_batches),
             "log_var_gender": lv_gender / max(1, n_gender_batches),
             "age_mae": float(torch.cat(age_abs_errors).mean()) if age_abs_errors else float("nan"),
+            "age_rmse": float(torch.sqrt((torch.cat(age_abs_errors) ** 2).mean())) if age_abs_errors else float("nan"),
             "gender_accuracy": gender_correct / max(1, gender_total) if gender_total else float("nan"),
+            "gender_selective_accuracy": (
+                gender_correct_accepted / max(1, gender_total_accepted) if gender_total_accepted else float("nan")
+            ),
+            "gender_abstention": gender_abstention_value,
+            "gender_coverage": (
+                1.0 - gender_abstention_value if gender_abstention_value == gender_abstention_value else float("nan")
+            ),
         }
         return metrics
 
@@ -187,10 +236,25 @@ class Trainer:
         has_pretrained = bool(self.config["model"].get("pretrained_checkpoint"))
         stages = build_stage_plan(self.training_cfg, has_pretrained)
         age_max = self.config["model"]["age_head"].get("age_max", 120)
+        total_epochs_planned = sum(stage.epochs for stage in stages)
+        seed_display = self.training_cfg.get("seed", self.config.get("seed"))
+
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in self.model.parameters())
+        start_line = (
+            f"[{self.experiment_name} | seed={seed_display}] Starting training | device={self.device} | "
+            f"train_samples={self.train_dataset_size} | val_samples={self.val_dataset_size} | "
+            f"trainable_params={trainable_params:,}/{total_params:,} | "
+            "checkpoint_selection=balanced_score (also tracked: age_mae, gender_accuracy)"
+        )
+        print(start_line, flush=True)
+        logger.info(start_line)
 
         global_epoch = 0
         for stage in stages:
-            logger.info("=== %s (epochs=%d, lr=%.2e) ===", stage.name, stage.epochs, stage.lr)
+            stage_line = f"=== {stage.name} (epochs={stage.epochs}, lr={stage.lr:.2e}) ==="
+            print(stage_line, flush=True)
+            logger.info(stage_line)
             self.model.set_stage_trainable(stage.freeze_backbone, stage.unfreeze_layers)
             optimizer = _build_optimizer(self.model, stage.lr, self.training_cfg.get("weight_decay", 0.05))
             scheduler = _build_scheduler(optimizer, stage.epochs, self.training_cfg["scheduler"].get("warmup_epochs", 1))
@@ -200,6 +264,7 @@ class Trainer:
                 start = time.time()
                 train_metrics = self._run_batches(self.train_loader, optimizer)
                 val_metrics = self._run_batches(self.val_loader, None)
+                current_lr = optimizer.param_groups[0]["lr"]
                 scheduler.step()
                 elapsed = time.time() - start
                 self.epoch_times.append(elapsed)
@@ -208,37 +273,106 @@ class Trainer:
                 self.history["train_loss"].append(train_metrics["loss"])
                 self.history["val_loss"].append(val_metrics["loss"])
                 self.history["val_age_mae"].append(val_metrics["age_mae"])
+                self.history["val_age_rmse"].append(val_metrics["age_rmse"])
                 self.history["val_gender_accuracy"].append(val_metrics["gender_accuracy"])
+                self.history["val_gender_selective_accuracy"].append(val_metrics["gender_selective_accuracy"])
+                self.history["val_gender_coverage"].append(val_metrics["gender_coverage"])
+                self.history["val_gender_abstention"].append(val_metrics["gender_abstention"])
                 self.history["age_loss"].append(train_metrics["age_loss"])
                 self.history["gender_loss"].append(train_metrics["gender_loss"])
                 self.history["effective_age_weight"].append(train_metrics["effective_age_weight"])
                 self.history["effective_gender_weight"].append(train_metrics["effective_gender_weight"])
                 self.history["log_var_age"].append(train_metrics["log_var_age"])
                 self.history["log_var_gender"].append(train_metrics["log_var_gender"])
-
-                logger.info(
-                    "epoch %d | train_loss=%.4f val_loss=%.4f val_age_mae=%.3f val_gender_acc=%.3f (%.1fs)",
-                    global_epoch, train_metrics["loss"], val_metrics["loss"],
-                    val_metrics["age_mae"], val_metrics["gender_accuracy"], elapsed,
-                )
+                self.history["lr"].append(current_lr)
+                self.history["epoch_time_seconds"].append(elapsed)
 
                 balanced = self._balanced_score(val_metrics["age_mae"], val_metrics["gender_accuracy"], age_max)
                 self._maybe_checkpoint("age_mae", val_metrics["age_mae"], global_epoch, val_metrics)
                 self._maybe_checkpoint("gender_accuracy", val_metrics["gender_accuracy"], global_epoch, val_metrics)
-                self._maybe_checkpoint("balanced_score", balanced, global_epoch, val_metrics)
+                is_best_balanced = self._maybe_checkpoint("balanced_score", balanced, global_epoch, val_metrics)
+
+                epoch_line = (
+                    f"[{self.experiment_name} | seed={seed_display}] "
+                    f"Epoch {global_epoch:02d}/{total_epochs_planned} | {elapsed:.1f}s | lr={current_lr:.5f} | "
+                    f"train_total={train_metrics['loss']:.4f} train_age={train_metrics['age_loss']:.4f} "
+                    f"train_gender={train_metrics['gender_loss']:.4f} | "
+                    f"val_total={val_metrics['loss']:.4f} val_age_mae={val_metrics['age_mae']:.3f} "
+                    f"val_age_rmse={val_metrics['age_rmse']:.3f} | "
+                    f"val_gender_selective_acc={val_metrics['gender_selective_accuracy']:.3f} "
+                    f"val_coverage={val_metrics['gender_coverage']:.3f} val_abstention={val_metrics['gender_abstention']:.3f} | "
+                    f"selection_score={balanced:.4f} | best={'yes' if is_best_balanced else 'no'} | "
+                    f"early_stop={early_stopping.num_bad_epochs}/{early_stopping.patience}"
+                )
+                print(epoch_line, flush=True)
+                logger.info(epoch_line)
+
+                self._write_incremental_history()
+                self._write_status_atomic(stage.name, global_epoch, total_epochs_planned, early_stopping)
 
                 if not (val_metrics["loss"] == val_metrics["loss"]):
                     continue
                 if early_stopping.step(val_metrics["loss"]):
-                    logger.info("Early stopping triggered at epoch %d", global_epoch)
+                    stop_line = f"[{self.experiment_name} | seed={seed_display}] Early stopping triggered at epoch {global_epoch}"
+                    print(stop_line, flush=True)
+                    logger.info(stop_line)
                     break
+
+        best_line = (
+            f"[{self.experiment_name} | seed={seed_display}] Training complete | "
+            f"best scores: {{'age_mae': {self.trackers['age_mae'].best_value}, "
+            f"'gender_accuracy': {self.trackers['gender_accuracy'].best_value}, "
+            f"'balanced_score': {self.trackers['balanced_score'].best_value}}}"
+        )
+        print(best_line, flush=True)
+        logger.info(best_line)
 
         return {"history": self.history, "epoch_times": self.epoch_times}
 
-    def _maybe_checkpoint(self, metric_name: str, value: float, epoch: int, metrics: dict) -> None:
+    def _maybe_checkpoint(self, metric_name: str, value: float, epoch: int, metrics: dict) -> bool:
         if value != value:  # NaN, task absent this run
-            return
+            return False
         tracker = self.trackers[metric_name]
-        if tracker.update(value):
+        improved = tracker.update(value)
+        if improved:
             path = self.checkpoint_dir / f"{self.experiment_name}_best_{metric_name}.pt"
             save_checkpoint(path, self.model, None, epoch, metrics, self.config)
+        return improved
+
+    def _write_incremental_history(self) -> None:
+        """Rewrite history.csv/json after every epoch (not just at the end of
+        train()), so a notebook can inspect progress -- or recover a
+        partial run's history -- even if the process is interrupted
+        mid-training. Rewriting the whole file each time (rather than
+        appending) is simplest and cheap at these epoch counts, and avoids
+        any header/row mismatch risk."""
+        keys = list(self.history.keys())
+        n_rows = len(self.history[keys[0]]) if keys else 0
+        with open(self.history_csv_path, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(keys)
+            for i in range(n_rows):
+                writer.writerow([self.history[key][i] for key in keys])
+
+        with open(self.history_json_path, "w", encoding="utf-8") as fh:
+            json.dump(self.history, fh, indent=2)
+
+    def _write_status_atomic(self, stage_name: str, epoch: int, total_epochs_planned: int, early_stopping: EarlyStopping) -> None:
+        """Write a live status file via write-temp-then-rename, so a reader
+        never observes a half-written file (``Path.replace`` is atomic on
+        both POSIX and Windows when source/destination are on the same
+        filesystem, which they always are here)."""
+        status = {
+            "experiment_name": self.experiment_name,
+            "stage": stage_name,
+            "epoch": epoch,
+            "total_epochs_planned": total_epochs_planned,
+            "best_scores": {name: tracker.best_value for name, tracker in self.trackers.items()},
+            "early_stopping_bad_epochs": early_stopping.num_bad_epochs,
+            "early_stopping_patience": early_stopping.patience,
+            "updated_at_utc": datetime.datetime.utcnow().isoformat() + "Z",
+        }
+        tmp_path = self.status_path.with_suffix(".json.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(status, fh, indent=2)
+        tmp_path.replace(self.status_path)
