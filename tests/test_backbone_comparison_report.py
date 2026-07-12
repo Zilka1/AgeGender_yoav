@@ -41,7 +41,8 @@ def test_build_backbone_comparison_table_has_expected_rows_and_values():
     assert row_by_metric["Age MAE"]["simple_cnn"] == 6.50
     assert row_by_metric["Age MAE"]["custom_resnet18"] == 5.71
     # Calibrated coverage absent from both fixtures -> None, not fabricated.
-    assert row_by_metric["Calibrated interval coverage"]["simple_cnn"] is None
+    import pandas as pd
+    assert pd.isna(row_by_metric["Calibrated interval coverage"]["simple_cnn"])
 
 
 def test_backbone_comparison_interpretation_credits_lower_mae_side():
