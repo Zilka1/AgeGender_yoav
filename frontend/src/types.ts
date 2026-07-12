@@ -83,6 +83,7 @@ export interface PredictionResponse {
   knn_comparison: KNNComparison | null;
   model_version: string;
   checkpoint_name: string | null;
+  cropped_image_base64: string | null;
   face_detected: boolean | null;
   warnings: string[];
   latency_ms: number;

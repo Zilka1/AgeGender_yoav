@@ -100,6 +100,13 @@ def _encode_heatmap_overlay(image: Image.Image, heatmap: np.ndarray) -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+def _encode_image_b64(image: Image.Image) -> str:
+    """Encode a PIL image to a base64 PNG string."""
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     state = get_app_state()
@@ -199,6 +206,7 @@ def _build_prediction_response(result) -> PredictionResponse:
         knn_comparison=knn_response,
         model_version=result.model_version,
         checkpoint_name=result.checkpoint_name,
+        cropped_image_base64=_encode_image_b64(result.model_input_image) if result.model_input_image else None,
         face_detected=result.face_detected,
         warnings=result.warnings,
         latency_ms=result.latency_ms,

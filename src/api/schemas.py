@@ -101,6 +101,9 @@ class PredictionResponse(BaseModel):
     knn_comparison: KNNComparisonResponse | None
     model_version: str
     checkpoint_name: str | None
+    cropped_image_base64: str | None = Field(
+        None, description="Base64 encoded PNG of the cropped face region actually fed into the model."
+    )
     face_detected: bool | None = Field(
         None, description="Whether classical Haar-cascade face detection found a face to crop to; null if disabled."
     )

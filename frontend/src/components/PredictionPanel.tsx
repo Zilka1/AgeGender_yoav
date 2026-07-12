@@ -38,6 +38,18 @@ export default function PredictionPanel({ result }: { result: PredictionResponse
 
       {hasPrediction ? (
         <>
+          {result.cropped_image_base64 && (
+            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+              <h3 className="mb-3 text-sm font-semibold">Processed Face Region</h3>
+              <div className="flex justify-center">
+                <img
+                  src={`data:image/png;base64,${result.cropped_image_base64}`}
+                  alt="Cropped face fed to the model"
+                  className="max-h-64 rounded-md shadow-sm"
+                />
+              </div>
+            </div>
+          )}
           <div className="grid gap-4 sm:grid-cols-2">
             <AgePredictionCard age={result.age!} />
             <GenderPredictionCard gender={result.gender!} />
